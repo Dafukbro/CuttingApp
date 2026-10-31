@@ -29,44 +29,52 @@ def _ph(es_pg, cantidad=1):
     return ", ".join([simbolo] * cantidad)
 
 
+@st.cache_resource
 def init_db():
     conn, es_pg = _conectar()
     c = conn.cursor()
     id_tipo = "SERIAL PRIMARY KEY" if es_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
-    c.execute("""
+    tablas = [
+        """
         CREATE TABLE IF NOT EXISTS usuarios (
             usuario TEXT PRIMARY KEY,
             password TEXT
         )
-    """)
-
-    c.execute("""
+        """,
+        """
         CREATE TABLE IF NOT EXISTS perfil (
             usuario TEXT PRIMARY KEY, 
             peso REAL, altura REAL, edad INTEGER,
             meta_kcal INTEGER, meta_prot INTEGER, meta_carbs INTEGER, meta_grasas INTEGER
         )
-    """)
-
-    c.execute(f"""
+        """,
+        f"""
         CREATE TABLE IF NOT EXISTS comidas (
             id {id_tipo}, 
             usuario TEXT,
             fecha TEXT, nombre TEXT,
             kcal INTEGER, proteina INTEGER, carbs INTEGER, grasas INTEGER
         )
-    """)
-
-    c.execute(f"""
+        """,
+        f"""
         CREATE TABLE IF NOT EXISTS historial_peso (
             id {id_tipo}, 
             usuario TEXT,
             fecha TEXT, peso REAL
         )
-    """)
-    conn.commit()
+        """
+    ]
+
+    for sql in tablas:
+        try:
+            c.execute(sql)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
     conn.close()
+    return True
 
 
 # --- FUNCIONES DE AUTENTICACIÓN ---
