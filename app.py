@@ -4,7 +4,7 @@ import streamlit as st
 import database as db
 import ai_helper as ai
 
-if not hasattr(db, "obtener_ayuno") or not hasattr(db, "cancelar_ayuno"):
+if not hasattr(db, "_hash_password"):
     importlib.reload(db)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
@@ -119,14 +119,26 @@ else:
         carbs_hoy = sum(x[4] for x in comidas_hoy)
         grasas_hoy = sum(x[5] for x in comidas_hoy)
         kcal_restantes = meta_kcal - kcal_hoy
+        prot_restante = meta_prot - prot_hoy
+        carbs_restantes = meta_carbs - carbs_hoy
+        grasas_restantes = meta_grasas - grasas_hoy
 
-        st.progress(min(kcal_hoy / max(meta_kcal, 1), 1.0))
-        
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Kcal Restantes", f"{kcal_restantes}", delta="Bien" if kcal_restantes >= 0 else "Exceso")
-        col2.metric("Proteína", f"{prot_hoy}g", f"Faltan {max(meta_prot - prot_hoy, 0)}g")
-        col3.metric("Carbohidratos", f"{carbs_hoy}g", f"Meta: {meta_carbs}g")
-        col4.metric("Grasas", f"{grasas_hoy}g", f"Meta: {meta_grasas}g")
+        with st.container(border=True):
+            st.markdown(f"🔥 **Calorías del día:** {kcal_hoy} / {meta_kcal} kcal ({int(min(kcal_hoy / max(meta_kcal, 1), 1.0) * 100)}%)")
+            st.progress(min(kcal_hoy / max(meta_kcal, 1), 1.0))
+
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("Kcal Restantes", f"{kcal_restantes}", delta="En meta" if kcal_restantes >= 0 else f"Exceso ({abs(kcal_restantes)})", delta_color="normal" if kcal_restantes >= 0 else "inverse")
+            with col2:
+                st.metric("🥩 Proteína", f"{prot_hoy}g / {meta_prot}g", f"Faltan {max(prot_restante, 0)}g" if prot_restante > 0 else "¡Meta lograda!")
+                st.progress(min(prot_hoy / max(meta_prot, 1), 1.0))
+            with col3:
+                st.metric("🍚 Carbs", f"{carbs_hoy}g / {meta_carbs}g", f"Restan {carbs_restantes}g" if carbs_restantes >= 0 else f"+{abs(carbs_restantes)}g")
+                st.progress(min(carbs_hoy / max(meta_carbs, 1), 1.0))
+            with col4:
+                st.metric("🥑 Grasas", f"{grasas_hoy}g / {meta_grasas}g", f"Restan {grasas_restantes}g" if grasas_restantes >= 0 else f"+{abs(grasas_restantes)}g")
+                st.progress(min(grasas_hoy / max(meta_grasas, 1), 1.0))
         
         st.divider()
         st.subheader("📋 Consumido hoy")
@@ -329,21 +341,37 @@ else:
                             db.eliminar_historial_ayuno(id_ay)
                             st.rerun()
 
-    # --- PESTAÑA 3: CHAT IA ---
+    # --- PESTAÑA 4: CHAT IA ---
     with tab_ia:
         if "mensajes" not in st.session_state:
             st.session_state.mensajes = []
 
-        contenedor_chat = st.container(height=450)
+        # Botones de preguntas rápidas para usar con 1 toque desde el celular
+        st.caption("⚡ **Consultas rápidas:**")
+        col_q1, col_q2, col_q3, col_q4 = st.columns([2, 2, 2, 1])
+        pregunta_rapida = None
+        if col_q1.button("🍽️ ¿Qué como con mis macros restantes?", use_container_width=True, key=f"q1_{usuario}"):
+            pregunta_rapida = "¿Qué opciones de comida me recomiendas para cuadrar exactamente las calorías y macros que me faltan hoy?"
+        if col_q2.button("🥩 ¿Cómo llego a mi proteína hoy?", use_container_width=True, key=f"q2_{usuario}"):
+            pregunta_rapida = "¿Qué alimentos bajos en calorías puedo agregar hoy para completar mi meta de proteína sin pasarme de grasas ni carbohidratos?"
+        if col_q3.button("📊 Evalúa mi día de hoy", use_container_width=True, key=f"q3_{usuario}"):
+            pregunta_rapida = "Evalúa cómo van mis calorías, macronutrientes y ayuno de hoy y dame un consejo práctico."
+        if col_q4.button("🧹 Limpiar", use_container_width=True, key=f"q_clear_{usuario}"):
+            st.session_state.mensajes = []
+            st.rerun()
+
+        contenedor_chat = st.container(height=420)
 
         with contenedor_chat:
             if not st.session_state.mensajes:
-                st.info(f"👋 ¡Hola, {usuario}! Pregúntame sobre tu dieta, calorías restantes o ideas de comidas.")
+                st.info(f"👋 ¡Hola, {usuario}! Toca uno de los botones rápidos de arriba o escribe tu consulta abajo.")
             for msg in st.session_state.mensajes:
                 with st.chat_message(msg["rol"]):
                     st.markdown(msg["texto"])
 
-        pregunta = st.chat_input("Consulta sobre tu dieta...", key=f"chat_input_{usuario}")
+        pregunta_input = st.chat_input("Consulta sobre tu dieta...", key=f"chat_input_{usuario}")
+        pregunta = pregunta_rapida or pregunta_input
+
         if pregunta:
             st.session_state.mensajes.append({"rol": "user", "texto": pregunta})
             with contenedor_chat:

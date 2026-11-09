@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import streamlit as st
 
@@ -5,6 +6,11 @@ try:
     import psycopg2
 except ImportError:
     psycopg2 = None
+
+
+def _hash_password(password):
+    """Encripta la contraseña con SHA-256."""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
 def _usar_postgres():
@@ -97,12 +103,13 @@ def init_db(_version=2):
 
 # --- FUNCIONES DE AUTENTICACIÓN ---
 def crear_usuario(usuario, password):
-    """Intenta crear un usuario. Retorna False si ya existe."""
+    """Intenta crear un usuario con contraseña encriptada (SHA-256). Retorna False si ya existe."""
     conn, es_pg = _conectar()
     c = conn.cursor()
     p = _ph(es_pg, 2)
+    pwd_hash = _hash_password(password)
     try:
-        c.execute(f"INSERT INTO usuarios (usuario, password) VALUES ({p})", (usuario, password))
+        c.execute(f"INSERT INTO usuarios (usuario, password) VALUES ({p})", (usuario, pwd_hash))
         conn.commit()
         exito = True
     except Exception:
@@ -113,14 +120,32 @@ def crear_usuario(usuario, password):
 
 
 def verificar_usuario(usuario, password):
-    """Verifica si las credenciales coinciden en la base de datos."""
+    """Verifica credenciales con SHA-256 y migra automáticamente cuentas antiguas en texto plano."""
     conn, es_pg = _conectar()
     c = conn.cursor()
     simbolo = "%s" if es_pg else "?"
-    c.execute(f"SELECT * FROM usuarios WHERE usuario = {simbolo} AND password = {simbolo}", (usuario, password))
-    existe = c.fetchone() is not None
+    pwd_hash = _hash_password(password)
+
+    c.execute(f"SELECT password FROM usuarios WHERE usuario = {simbolo}", (usuario,))
+    fila = c.fetchone()
+    if not fila:
+        conn.close()
+        return False
+
+    pwd_guardada = fila[0]
+    if pwd_guardada == pwd_hash:
+        conn.close()
+        return True
+
+    # Si era una cuenta anterior en texto plano, se valida y se encripta automáticamente
+    if pwd_guardada == password:
+        c.execute(f"UPDATE usuarios SET password = {simbolo} WHERE usuario = {simbolo}", (pwd_hash, usuario))
+        conn.commit()
+        conn.close()
+        return True
+
     conn.close()
-    return existe
+    return False
 
 
 # --- FUNCIONES DEL TRACKER (PIDEN EL USUARIO) ---
