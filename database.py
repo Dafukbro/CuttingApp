@@ -63,6 +63,24 @@ def init_db():
             usuario TEXT,
             fecha TEXT, peso REAL
         )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS ayuno (
+            usuario TEXT PRIMARY KEY,
+            inicio_iso TEXT,
+            horas_meta INTEGER,
+            activo INTEGER
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS historial_ayunos (
+            id {id_tipo},
+            usuario TEXT,
+            fecha TEXT,
+            protocolo TEXT,
+            horas_completadas REAL,
+            horas_meta INTEGER
+        )
         """
     ]
 
@@ -197,6 +215,65 @@ def obtener_historial_peso(usuario):
     c = conn.cursor()
     s = "%s" if es_pg else "?"
     c.execute(f"SELECT fecha, peso FROM historial_peso WHERE usuario = {s} ORDER BY fecha ASC", (usuario,))
+    datos = c.fetchall()
+    conn.close()
+    return datos
+
+
+# --- FUNCIONES DE AYUNO INTERMITENTE ---
+def obtener_ayuno(usuario):
+    conn, es_pg = _conectar()
+    c = conn.cursor()
+    s = "%s" if es_pg else "?"
+    c.execute(f"SELECT inicio_iso, horas_meta, activo FROM ayuno WHERE usuario = {s}", (usuario,))
+    datos = c.fetchone()
+    conn.close()
+    return datos
+
+
+def iniciar_ayuno(usuario, inicio_iso, horas_meta):
+    conn, es_pg = _conectar()
+    c = conn.cursor()
+    s = "%s" if es_pg else "?"
+    p = _ph(es_pg, 4)
+    c.execute(f"SELECT usuario FROM ayuno WHERE usuario = {s}", (usuario,))
+    if c.fetchone():
+        c.execute(
+            f"UPDATE ayuno SET inicio_iso = {s}, horas_meta = {s}, activo = 1 WHERE usuario = {s}",
+            (inicio_iso, int(horas_meta), usuario)
+        )
+    else:
+        c.execute(
+            f"INSERT INTO ayuno (usuario, inicio_iso, horas_meta, activo) VALUES ({p})",
+            (usuario, inicio_iso, int(horas_meta), 1)
+        )
+    conn.commit()
+    conn.close()
+
+
+def detener_ayuno(usuario, fecha_sel, protocolo, horas_completadas, horas_meta):
+    conn, es_pg = _conectar()
+    c = conn.cursor()
+    s = "%s" if es_pg else "?"
+    p = _ph(es_pg, 5)
+    c.execute(f"UPDATE ayuno SET activo = 0 WHERE usuario = {s}", (usuario,))
+    if horas_completadas >= 0.1:
+        c.execute(
+            f"INSERT INTO historial_ayunos (usuario, fecha, protocolo, horas_completadas, horas_meta) VALUES ({p})",
+            (usuario, str(fecha_sel), protocolo, round(float(horas_completadas), 2), int(horas_meta))
+        )
+    conn.commit()
+    conn.close()
+
+
+def obtener_historial_ayunos(usuario):
+    conn, es_pg = _conectar()
+    c = conn.cursor()
+    s = "%s" if es_pg else "?"
+    c.execute(
+        f"SELECT id, fecha, protocolo, horas_completadas, horas_meta FROM historial_ayunos WHERE usuario = {s} ORDER BY id DESC LIMIT 10",
+        (usuario,)
+    )
     datos = c.fetchall()
     conn.close()
     return datos
