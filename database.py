@@ -277,3 +277,23 @@ def obtener_historial_ayunos(usuario):
     datos = c.fetchall()
     conn.close()
     return datos
+
+
+def cancelar_ayuno(usuario):
+    """Descarta el ayuno en curso sin guardarlo en el historial (Control y libertad del usuario)."""
+    conn, es_pg = _conectar()
+    c = conn.cursor()
+    s = "%s" if es_pg else "?"
+    c.execute(f"UPDATE ayuno SET activo = 0 WHERE usuario = {s}", (usuario,))
+    conn.commit()
+    conn.close()
+
+
+def eliminar_historial_ayuno(id_ayuno):
+    """Elimina un registro del historial de ayunos."""
+    conn, es_pg = _conectar()
+    c = conn.cursor()
+    s = "%s" if es_pg else "?"
+    c.execute(f"DELETE FROM historial_ayunos WHERE id = {s}", (id_ayuno,))
+    conn.commit()
+    conn.close()

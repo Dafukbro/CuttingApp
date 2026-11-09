@@ -178,36 +178,66 @@ else:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    # --- PESTAÑA 3: AYUNO INTERMITENTE ---
+    # --- PESTAÑA 3: AYUNO INTERMITENTE (Heurísticas: Visibilidad, Mundo Real, Control y Prevención de Errores) ---
     with tab_ayuno:
-        st.subheader("⏳ Tracker de Ayuno Intermitente")
+        st.subheader("⏳ Ayuno Intermitente")
         datos_ayuno = db.obtener_ayuno(usuario)
         ayuno_activo = bool(datos_ayuno and datos_ayuno[2] == 1)
 
         if not ayuno_activo:
-            protocolos = {
-                "16:8 (16h ayuno / 8h comida - Ideal en Cutting)": 16,
-                "18:6 (18h ayuno / 6h comida - Avanzado)": 18,
-                "20:4 (20h ayuno / 4h comida - Warrior)": 20,
-                "14:10 (14h ayuno / 10h comida - Principiante)": 14,
-                "Personalizado": 0
-            }
-            seleccion = st.selectbox("Selecciona tu protocolo", list(protocolos.keys()), key=f"prot_ayuno_{usuario}")
-            if seleccion == "Personalizado":
-                horas_obj = st.slider("Horas de ayuno objetivo", min_value=12, max_value=36, value=16, key=f"slider_ayuno_{usuario}")
-            else:
-                horas_obj = protocolos[seleccion]
+            st.caption("🟢 **Estado actual:** En ventana de alimentación (sin ayuno activo)")
 
-            hace_horas = st.number_input(
-                "¿Hace cuántas horas fue tu última comida? (0 = empezar ahora mismo)",
-                min_value=0.0, max_value=24.0, value=0.0, step=0.5,
-                key=f"offset_ayuno_{usuario}"
-            )
+            with st.container(border=True):
+                st.markdown("#### 1. Elige tu protocolo")
+                protocolos = {
+                    "⭐ 16:8 — Estándar (16h ayuno / 8h comida)": 16,
+                    "🌱 14:10 — Principiante (14h ayuno / 10h comida)": 14,
+                    "🔥 18:6 — Avanzado (18h ayuno / 6h comida)": 18,
+                    "⚡ 20:4 — Guerrero (20h ayuno / 4h comida)": 20,
+                    "⚙️ Personalizado": 0
+                }
+                seleccion = st.selectbox("Protocolo de ayuno", list(protocolos.keys()), key=f"prot_ayuno_{usuario}")
+                if seleccion == "⚙️ Personalizado":
+                    horas_obj = st.slider("Horas de ayuno objetivo", min_value=12, max_value=36, value=16, key=f"slider_ayuno_{usuario}")
+                else:
+                    horas_obj = protocolos[seleccion]
 
-            if st.button("▶️ Iniciar Ayuno", use_container_width=True, key=f"btn_iniciar_ayuno_{usuario}"):
-                inicio_dt = ahora_local() - timedelta(hours=float(hace_horas))
-                db.iniciar_ayuno(usuario, inicio_dt.isoformat(), horas_obj)
-                st.rerun()
+                st.markdown("#### 2. ¿Cuándo terminaste tu última comida?")
+                modo_inicio = st.radio(
+                    "Momento de inicio",
+                    ["Empezar ahora mismo", "Elegir la hora de mi última comida"],
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key=f"modo_inicio_ayuno_{usuario}"
+                )
+
+                ahora_dt = ahora_local()
+                if modo_inicio == "Empezar ahora mismo":
+                    inicio_previsto = ahora_dt
+                else:
+                    hora_elegida = st.time_input(
+                        "Hora de tu última comida",
+                        value=ahora_dt.replace(minute=0, second=0, microsecond=0).time(),
+                        key=f"hora_comida_ayuno_{usuario}"
+                    )
+                    inicio_previsto = ahora_dt.replace(
+                        hour=hora_elegida.hour, minute=hora_elegida.minute, second=0, microsecond=0
+                    )
+                    # Si la hora elegida es mayor a la hora actual, asumimos que fue anoche
+                    if inicio_previsto > ahora_dt:
+                        inicio_previsto -= timedelta(days=1)
+
+                fin_previsto = inicio_previsto + timedelta(hours=horas_obj)
+                etiqueta_dia = "hoy" if fin_previsto.date() == ahora_dt.date() else "mañana"
+
+                st.info(
+                    f"🎯 **Vista previa:** Tu ayuno de **{horas_obj}h** cuenta desde las **{inicio_previsto.strftime('%I:%M %p')}** "
+                    f"y podrás volver a comer **{etiqueta_dia} a las {fin_previsto.strftime('%I:%M %p')}**."
+                )
+
+                if st.button("▶️ Iniciar Ayuno", type="primary", use_container_width=True, key=f"btn_iniciar_ayuno_{usuario}"):
+                    db.iniciar_ayuno(usuario, inicio_previsto.isoformat(), horas_obj)
+                    st.rerun()
         else:
             inicio_iso, horas_meta, _ = datos_ayuno
             inicio_dt = datetime.fromisoformat(inicio_iso)
@@ -220,6 +250,7 @@ else:
             horas_transcurridas = segundos_transcurridos / 3600.0
             segundos_meta = horas_meta * 3600.0
             progreso = min(segundos_transcurridos / max(segundos_meta, 1), 1.0)
+            porcentaje = int(progreso * 100)
 
             h_trans = int(segundos_transcurridos // 3600)
             m_trans = int((segundos_transcurridos % 3600) // 60)
@@ -228,51 +259,71 @@ else:
             h_rest = int(segundos_restantes // 3600)
             m_rest = int((segundos_restantes % 3600) // 60)
 
-            st.progress(progreso)
+            with st.container(border=True):
+                st.markdown(f"🔥 **Ayuno {horas_meta}:{max(24 - horas_meta, 0)} en curso** — **{porcentaje}% completado**")
+                st.progress(progreso)
 
-            col_a1, col_a2, col_a3 = st.columns(3)
-            col_a1.metric("Tiempo en Ayuno", f"{h_trans}h {m_trans}m", f"Meta: {horas_meta}h")
-            col_a2.metric(
-                "Restante",
-                f"{h_rest}h {m_rest}m" if segundos_restantes > 0 else "¡Logrado! 🎉",
-                delta="En curso" if segundos_restantes > 0 else "Completado"
+                col_a1, col_a2, col_a3 = st.columns(3)
+                col_a1.metric("Tiempo en Ayuno", f"{h_trans}h {m_trans}m", f"Meta: {horas_meta}h")
+                col_a2.metric(
+                    "Tiempo Restante",
+                    f"{h_rest}h {m_rest}m" if segundos_restantes > 0 else "¡Meta lograda! 🎉",
+                    delta="En curso" if segundos_restantes > 0 else "Completado"
+                )
+                col_a3.metric("Hora para comer", fin_dt.strftime("%I:%M %p"), f"Inicio: {inicio_dt.strftime('%I:%M %p')}")
+
+                # Etapa metabólica actual
+                if horas_transcurridas < 4:
+                    etapa = "🍽️ **Fase 1 (0–4h): Digestión** — Procesando nutrientes de tu última comida."
+                elif horas_transcurridas < 8:
+                    etapa = "📉 **Fase 2 (4–8h): Caída de insulina** — Baja la glucosa y empiezas a usar reservas."
+                elif horas_transcurridas < 12:
+                    etapa = "🔥 **Fase 3 (8–12h): Quema de glucógeno** — Tu cuerpo empieza a recurrir a la grasa."
+                elif horas_transcurridas < 16:
+                    etapa = "⚡ **Fase 4 (12–16h): Lipólisis activa** — Quema de grasa acelerada ideal para definición."
+                else:
+                    etapa = "🧬 **Fase 5 (+16h): Autofagia** — Renovación celular y máxima oxidación de grasas."
+
+                st.info(etapa)
+
+                col_btn1, col_btn2 = st.columns(2)
+                if col_btn1.button("🔄 Actualizar tiempo", use_container_width=True, key=f"btn_ref_ayuno_{usuario}"):
+                    st.rerun()
+                if col_btn2.button("✅ Terminar y Guardar", type="primary", use_container_width=True, key=f"btn_fin_ayuno_{usuario}"):
+                    protocolo_str = f"{horas_meta}:{max(24 - horas_meta, 0)}"
+                    db.detener_ayuno(usuario, fecha_hoy(), protocolo_str, horas_transcurridas, horas_meta)
+                    st.success(f"¡Ayuno guardado! Completaste {h_trans}h {m_trans}m.")
+                    st.rerun()
+
+                with st.expander("⚙️ Opciones adicionales (Corregir o cancelar ayuno)"):
+                    st.caption("Si iniciaste el ayuno por error, puedes descartarlo sin que afecte tu historial.")
+                    if st.button("🗑️ Descartar ayuno actual sin guardar", use_container_width=True, key=f"btn_cancel_ayuno_{usuario}"):
+                        db.cancelar_ayuno(usuario)
+                        st.rerun()
+
+        with st.expander("ℹ️ Guía rápida: ¿Qué puedo consumir durante el ayuno?"):
+            st.markdown(
+                "- ✅ **Permitido (0 kcal):** Agua natural o con gas, café negro sin azúcar, té o infusiones sin endulzar, sal/electrolitos.\n"
+                "- ❌ **Rompe el ayuno:** Azúcar, leche, crema, aceite, caldos con grasa, proteína en polvo o snacks."
             )
-            col_a3.metric("Romper ayuno", fin_dt.strftime("%I:%M %p"), f"Inicio: {inicio_dt.strftime('%I:%M %p')}")
-
-            # Etapa metabólica según horas de ayuno
-            if horas_transcurridas < 4:
-                etapa = "🍽️ **Fase 1 (0-4h): Digestión y absorción** — Tu cuerpo está procesando tu última comida."
-            elif horas_transcurridas < 8:
-                etapa = "📉 **Fase 2 (4-8h): Caída de insulina** — Baja el azúcar en sangre y empiezas a usar glucógeno."
-            elif horas_transcurridas < 12:
-                etapa = "🔥 **Fase 3 (8-12h): Transición metabólica** — Reservas de glucógeno bajas; inicia la quema de grasa."
-            elif horas_transcurridas < 16:
-                etapa = "⚡ **Fase 4 (12-16h): Quema de grasa activa (Cetosis ligera)** — Lipólisis acelerada ideal para cutting."
-            else:
-                etapa = "🧬 **Fase 5 (+16h): Autofagia y oxidación máxima de grasas** — Renovación celular profunda."
-
-            st.info(etapa)
-
-            col_btn1, col_btn2 = st.columns(2)
-            if col_btn1.button("🔄 Actualizar reloj", use_container_width=True, key=f"btn_ref_ayuno_{usuario}"):
-                st.rerun()
-            if col_btn2.button("⏹️ Terminar Ayuno", use_container_width=True, key=f"btn_fin_ayuno_{usuario}"):
-                protocolo_str = f"{horas_meta}:{max(24 - horas_meta, 0)}"
-                db.detener_ayuno(usuario, fecha_hoy(), protocolo_str, horas_transcurridas, horas_meta)
-                st.success(f"¡Ayuno registrado! Completaste {h_trans}h {m_trans}m.")
-                st.rerun()
 
         st.divider()
-        st.subheader("📜 Historial de Ayunos Recientes")
+        st.subheader("📜 Historial de Ayunos")
         hist_ayunos = db.obtener_historial_ayunos(usuario)
         if not hist_ayunos:
-            st.caption("Aún no tienes ayunos completados registrados.")
+            st.info("Aún no tienes ayunos completados registrados.")
         else:
-            for _, f_ay, prot_ay, h_comp, h_m in hist_ayunos:
+            for id_ay, f_ay, prot_ay, h_comp, h_m in hist_ayunos:
                 cumplido = "✅ Meta cumplida" if h_comp >= h_m else "⚠️ Parcial"
                 with st.container(border=True):
-                    st.markdown(f"📅 **{f_ay}** — Protocolo **{prot_ay}**")
-                    st.caption(f"⏱️ Duración: **{h_comp:.1f} h** de {h_m} h ｜ {cumplido}")
+                    col_h1, col_h2 = st.columns([5, 1])
+                    with col_h1:
+                        st.markdown(f"📅 **{f_ay}** — Protocolo **{prot_ay}** ({cumplido})")
+                        st.caption(f"⏱️ Duración completada: **{h_comp:.1f} horas** de {h_m}h objetivo")
+                    with col_h2:
+                        if st.button("🗑️", key=f"del_ayuno_{usuario}_{id_ay}"):
+                            db.eliminar_historial_ayuno(id_ay)
+                            st.rerun()
 
     # --- PESTAÑA 3: CHAT IA ---
     with tab_ia:
