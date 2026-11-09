@@ -1,7 +1,11 @@
 from datetime import datetime, timezone, timedelta
+import importlib
 import streamlit as st
 import database as db
 import ai_helper as ai
+
+if not hasattr(db, "obtener_ayuno") or not hasattr(db, "cancelar_ayuno"):
+    importlib.reload(db)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
 
@@ -12,7 +16,7 @@ def ahora_local():
     return datetime.now(ZONA_HORARIA)
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
-db.init_db()
+db.init_db(2)
 
 API_KEY = st.secrets["API_KEY"]
 

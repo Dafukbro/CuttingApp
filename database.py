@@ -30,7 +30,7 @@ def _ph(es_pg, cantidad=1):
 
 
 @st.cache_resource
-def init_db():
+def init_db(_version=2):
     conn, es_pg = _conectar()
     c = conn.cursor()
     id_tipo = "SERIAL PRIMARY KEY" if es_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
