@@ -1,0 +1,8 @@
+.streamlit/
+venv/
+.venv/
+__pycache__/
+*.pyc
+cutting.db
+.env
+

@@ -1,7 +1,12 @@
-from datetime import date
+from datetime import datetime, timezone, timedelta
 import streamlit as st
 import database as db
 import ai_helper as ai
+
+ZONA_HORARIA = timezone(timedelta(hours=-5))
+
+def fecha_hoy():
+    return datetime.now(ZONA_HORARIA).date()
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
 db.init_db()
@@ -72,7 +77,7 @@ if not datos_perfil:
                     meta_carbs = int((meta_kcal - (meta_prot * 4) - (meta_grasas * 9)) / 4)
                     
                     db.crear_perfil(usuario, p_val, a_val, e_val, meta_kcal, meta_prot, meta_carbs, meta_grasas)
-                    db.registrar_peso_diario(usuario, date.today(), p_val)
+                    db.registrar_peso_diario(usuario, fecha_hoy(), p_val)
                     st.success("¡Perfil creado!")
                     st.rerun()
                 except Exception as e:
@@ -99,7 +104,7 @@ else:
 
     # --- PESTAÑA 1: RESUMEN DEL DÍA (Visibilidad del estado del sistema) ---
     with tab_dash:
-        fecha_activa = st.date_input("📅 Fecha", value=date.today(), key=f"fecha_{usuario}")
+        fecha_activa = st.date_input("📅 Fecha", value=fecha_hoy(), key=f"fecha_{usuario}")
         comidas_hoy = db.obtener_comidas_por_fecha(usuario, fecha_activa)
 
         kcal_hoy = sum(x[2] for x in comidas_hoy)
