@@ -322,3 +322,27 @@ def eliminar_historial_ayuno(id_ayuno):
     c.execute(f"DELETE FROM historial_ayunos WHERE id = {s}", (id_ayuno,))
     conn.commit()
     conn.close()
+
+
+def obtener_resumen_dias(usuario, fechas_lista):
+    """Obtiene calorías y proteínas totales por día para una lista de fechas (Resumen semanal)."""
+    if not fechas_lista:
+        return {}
+    conn, es_pg = _conectar()
+    c = conn.cursor()
+    s = "%s" if es_pg else "?"
+    placeholders = _ph(es_pg, len(fechas_lista))
+    parametros = [usuario] + [str(f) for f in fechas_lista]
+    c.execute(
+        f"""
+        SELECT fecha, SUM(kcal), SUM(proteina)
+        FROM comidas
+        WHERE usuario = {s} AND fecha IN ({placeholders})
+        GROUP BY fecha
+        ORDER BY fecha ASC
+        """,
+        tuple(parametros)
+    )
+    filas = c.fetchall()
+    conn.close()
+    return {fila[0]: (int(fila[1] or 0), int(fila[2] or 0)) for fila in filas}

@@ -4,7 +4,7 @@ import streamlit as st
 import database as db
 import ai_helper as ai
 
-if not hasattr(db, "_hash_password"):
+if not hasattr(db, "obtener_resumen_dias"):
     importlib.reload(db)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
@@ -157,6 +157,37 @@ else:
                             st.rerun()
 
         st.divider()
+        st.subheader("📊 Balance Semanal (Últimos 7 días)")
+        fechas_7d = [fecha_activa - timedelta(days=i) for i in range(6, -1, -1)]
+        resumen_7d = db.obtener_resumen_dias(usuario, fechas_7d)
+        dias_con_registro = len(resumen_7d)
+
+        if dias_con_registro == 0:
+            st.caption("Registra tus comidas durante la semana para ver tu promedio de calorías y la grasa estimada oxidada.")
+        else:
+            total_kcal_sem = sum(v[0] for v in resumen_7d.values())
+            total_prot_sem = sum(v[1] for v in resumen_7d.values())
+            prom_kcal = int(total_kcal_sem / dias_con_registro)
+            prom_prot = int(total_prot_sem / dias_con_registro)
+            dias_en_meta = sum(1 for v in resumen_7d.values() if v[0] <= meta_kcal + 100)
+
+            # Mantenimiento estimado = meta_kcal + 400 kcal. 1g de tejido adiposo ≈ 7.7 kcal
+            mantenimiento_est = meta_kcal + 400
+            deficit_acumulado = sum((mantenimiento_est - v[0]) for v in resumen_7d.values())
+            grasa_oxidada_g = max(int(deficit_acumulado / 7.7), 0)
+
+            with st.container(border=True):
+                col_s1, col_s2, col_s3 = st.columns(3)
+                col_s1.metric("Promedio Diario", f"{prom_kcal} kcal", f"🥩 {prom_prot}g Prot/día")
+                col_s2.metric("Días en Meta", f"{dias_en_meta} / {dias_con_registro}", "Últimos 7 días")
+                col_s3.metric(
+                    "🔥 Grasa Oxidada Est.",
+                    f"{grasa_oxidada_g} g",
+                    f"Déficit: {max(deficit_acumulado, 0)} kcal"
+                )
+                st.bar_chart({str(f)[5:]: resumen_7d.get(str(f), (0, 0))[0] for f in fechas_7d})
+
+        st.divider()
         st.subheader("⚖️ Evolución de Peso")
         col_p1, col_p2 = st.columns([2, 1])
         peso_hoy_input = col_p1.number_input("Peso (kg)", value=float(peso), step=0.1, key=f"peso_diario_{usuario}")
@@ -182,7 +213,7 @@ else:
                     st.error(f"Fallo en servidor de IA, intenta más tarde. Detalle: {e}")
 
         st.divider()
-        st.subheader("✍️ Registro por Texto")
+        st.subheader("✍️ Registro por Texto (IA)")
         comida_ia = st.text_input("¿Qué comiste?", placeholder="Ej. 200g pollo y arroz", key=f"comida_txt_{usuario}")
         if st.button("Calcular macros", use_container_width=True, key=f"btn_txt_{usuario}") and comida_ia:
             with st.spinner("Calculando..."):
@@ -193,6 +224,26 @@ else:
                     st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
+
+        st.divider()
+        st.subheader("🏷️ Registro Manual Rápido (Etiqueta Nutricional)")
+        st.caption("Ideal cuando ya conoces los valores de un empaque o porción. Si dejas Kcal en 0, se calcularán automáticamente a partir de los macros.")
+        with st.container(border=True):
+            nom_manual = st.text_input("Nombre del alimento o comida", placeholder="Ej. Yogurt Griego / Scoop de Whey", key=f"man_nom_{usuario}").strip()
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            kcal_man = col_m1.number_input("Kcal", min_value=0, max_value=5000, value=0, step=10, key=f"man_kcal_{usuario}")
+            prot_man = col_m2.number_input("Proteína (g)", min_value=0, max_value=500, value=0, step=1, key=f"man_prot_{usuario}")
+            carbs_man = col_m3.number_input("Carbs (g)", min_value=0, max_value=500, value=0, step=1, key=f"man_carbs_{usuario}")
+            grasas_man = col_m4.number_input("Grasas (g)", min_value=0, max_value=500, value=0, step=1, key=f"man_grasas_{usuario}")
+
+            if st.button("➕ Guardar comida manual", use_container_width=True, key=f"btn_man_{usuario}"):
+                if nom_manual:
+                    kcal_final = int(kcal_man) if kcal_man > 0 else int((prot_man * 4) + (carbs_man * 4) + (grasas_man * 9))
+                    db.agregar_comida(usuario, fecha_activa, nom_manual, kcal_final, int(prot_man), int(carbs_man), int(grasas_man))
+                    st.success(f"Guardado: {nom_manual} ({kcal_final} kcal)")
+                    st.rerun()
+                else:
+                    st.warning("Escribe el nombre del alimento para guardarlo.")
 
     # --- PESTAÑA 3: AYUNO INTERMITENTE (Heurísticas: Visibilidad, Mundo Real, Control y Prevención de Errores) ---
     with tab_ayuno:
