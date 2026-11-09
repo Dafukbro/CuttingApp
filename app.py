@@ -1,13 +1,17 @@
 from datetime import datetime, timezone, timedelta
 import importlib
+import re
+import time
 import streamlit as st
 import database as db
 import ai_helper as ai
 
-if not hasattr(db, "obtener_resumen_dias"):
+if not hasattr(db, "cambiar_password"):
     importlib.reload(db)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
+MAX_INTENTOS_LOGIN = 5
+SEGUNDOS_BLOQUEO = 60
 
 def fecha_hoy():
     return datetime.now(ZONA_HORARIA).date()
@@ -16,45 +20,67 @@ def ahora_local():
     return datetime.now(ZONA_HORARIA)
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
-db.init_db(2)
+db.init_db(3)
 
 API_KEY = st.secrets["API_KEY"]
 
-# --- GESTIÓN DE SESIÓN Y PANTALLA DE LOGIN ---
+# --- GESTIÓN DE SESIÓN, SEGURIDAD Y PANTALLA DE LOGIN ---
 if "usuario" not in st.session_state:
     st.session_state.usuario = None
+if "intentos_fallidos" not in st.session_state:
+    st.session_state.intentos_fallidos = 0
+if "bloqueo_hasta" not in st.session_state:
+    st.session_state.bloqueo_hasta = 0.0
 
 if not st.session_state.usuario:
     st.title("🔐 Acceso a Cutting Tracker")
     tab_login, tab_registro = st.tabs(["Iniciar Sesión", "Registrarse"])
 
     with tab_login:
-        user_login = st.text_input("Usuario", key="login_user").strip()
-        pass_login = st.text_input("Contraseña", type="password", key="login_pass")
-        if st.button("Entrar", use_container_width=True):
-            if user_login and pass_login:
-                if db.verificar_usuario(user_login, pass_login):
-                    st.session_state.clear()
-                    st.session_state.usuario = user_login
-                    st.session_state.mensajes = []
-                    st.success(f"¡Bienvenido, {user_login}!")
-                    st.rerun()
+        tiempo_restante_bloqueo = int(st.session_state.bloqueo_hasta - time.time())
+        if tiempo_restante_bloqueo > 0:
+            st.error(f"⏳ Demasiados intentos fallidos. Por seguridad, espera **{tiempo_restante_bloqueo} segundos** antes de volver a intentar.")
+        else:
+            user_login = st.text_input("Usuario", max_chars=30, key="login_user").strip()
+            pass_login = st.text_input("Contraseña", type="password", max_chars=128, key="login_pass")
+            if st.button("Entrar", type="primary", use_container_width=True):
+                if user_login and pass_login:
+                    if db.verificar_usuario(user_login, pass_login):
+                        st.session_state.clear()
+                        st.session_state.usuario = user_login
+                        st.session_state.mensajes = []
+                        st.success(f"¡Bienvenido, {user_login}!")
+                        st.rerun()
+                    else:
+                        st.session_state.intentos_fallidos += 1
+                        restantes = MAX_INTENTOS_LOGIN - st.session_state.intentos_fallidos
+                        if restantes <= 0:
+                            st.session_state.bloqueo_hasta = time.time() + SEGUNDOS_BLOQUEO
+                            st.session_state.intentos_fallidos = 0
+                            st.rerun()
+                        else:
+                            st.error(f"Usuario o contraseña incorrectos. Intentos restantes: {restantes}")
                 else:
-                    st.error("Usuario o contraseña incorrectos.")
-            else:
-                st.warning("Completa todos los campos.")
+                    st.warning("Completa todos los campos.")
 
     with tab_registro:
-        user_reg = st.text_input("Nuevo Usuario", key="reg_user").strip()
-        pass_reg = st.text_input("Nueva Contraseña", type="password", key="reg_pass")
+        user_reg = st.text_input("Nuevo Usuario (letras, números o guion bajo)", max_chars=30, key="reg_user").strip()
+        pass_reg = st.text_input("Nueva Contraseña (mínimo 6 caracteres)", type="password", max_chars=128, key="reg_pass")
+        pass_reg_conf = st.text_input("Confirmar Contraseña", type="password", max_chars=128, key="reg_pass_conf")
         if st.button("Crear Cuenta", use_container_width=True):
-            if user_reg and pass_reg:
+            if not user_reg or not pass_reg or not pass_reg_conf:
+                st.warning("Completa todos los campos.")
+            elif not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", user_reg):
+                st.error("El usuario debe tener entre 3 y 30 caracteres (solo letras, números, puntos, guiones o guion bajo, sin espacios).")
+            elif len(pass_reg) < 6:
+                st.error("La contraseña debe tener al menos 6 caracteres.")
+            elif pass_reg != pass_reg_conf:
+                st.error("Las contraseñas no coinciden.")
+            else:
                 if db.crear_usuario(user_reg, pass_reg):
                     st.success("¡Cuenta creada con éxito! Ahora puedes iniciar sesión.")
                 else:
                     st.error("Ese nombre de usuario ya existe.")
-            else:
-                st.warning("Completa todos los campos.")
     st.stop()
 
 usuario = st.session_state.usuario
@@ -153,7 +179,7 @@ else:
                         st.caption(f"🔥 **{k} kcal** ｜ 🥩 **{p}g** Prot ｜ 🍚 **{c}g** Carbs ｜ 🥑 **{g}g** Grasas")
                     with col_b:
                         if st.button("🗑️", key=f"del_{usuario}_{id_c}"):
-                            db.eliminar_comida(id_c)
+                            db.eliminar_comida(id_c, usuario)
                             st.rerun()
 
         st.divider()
@@ -389,7 +415,7 @@ else:
                         st.caption(f"⏱️ Duración completada: **{h_comp:.1f} horas** de {h_m}h objetivo")
                     with col_h2:
                         if st.button("🗑️", key=f"del_ayuno_{usuario}_{id_ay}"):
-                            db.eliminar_historial_ayuno(id_ay)
+                            db.eliminar_historial_ayuno(id_ay, usuario)
                             st.rerun()
 
     # --- PESTAÑA 4: CHAT IA ---
@@ -468,3 +494,20 @@ else:
             db.actualizar_perfil(usuario, nuevo_peso, altura, edad, nueva_kcal, nueva_prot, nuevos_carbs, nuevas_grasas)
             st.success("Perfil actualizado.")
             st.rerun()
+
+        st.divider()
+        with st.expander("🔐 Seguridad: Cambiar Contraseña"):
+            pwd_actual = st.text_input("Contraseña actual", type="password", key=f"pwd_act_{usuario}")
+            pwd_nueva = st.text_input("Nueva contraseña (mínimo 6 caracteres)", type="password", key=f"pwd_new_{usuario}")
+            pwd_conf = st.text_input("Confirmar nueva contraseña", type="password", key=f"pwd_conf_{usuario}")
+            if st.button("Actualizar Contraseña", use_container_width=True, key=f"btn_pwd_{usuario}"):
+                if not pwd_actual or not pwd_nueva or not pwd_conf:
+                    st.warning("Completa todos los campos.")
+                elif len(pwd_nueva) < 6:
+                    st.error("La nueva contraseña debe tener al menos 6 caracteres.")
+                elif pwd_nueva != pwd_conf:
+                    st.error("La nueva contraseña y su confirmación no coinciden.")
+                elif db.cambiar_password(usuario, pwd_actual, pwd_nueva):
+                    st.success("✅ Contraseña actualizada correctamente.")
+                else:
+                    st.error("La contraseña actual es incorrecta.")
