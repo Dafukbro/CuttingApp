@@ -76,7 +76,7 @@ def _ph(es_pg, cantidad=1):
 
 
 @st.cache_resource
-def init_db(_version=4):
+def init_db(_version=5):
     conn, es_pg = _conectar()
     try:
         c = conn.cursor()
@@ -128,6 +128,16 @@ def init_db(_version=4):
                 horas_completadas REAL,
                 horas_meta INTEGER
             )
+            """,
+            f"""
+            CREATE TABLE IF NOT EXISTS ejercicios (
+                id {id_tipo},
+                usuario TEXT,
+                fecha TEXT,
+                nombre TEXT,
+                duracion_min INTEGER,
+                kcal_quemadas INTEGER
+            )
             """
         ]
 
@@ -141,7 +151,10 @@ def init_db(_version=4):
         # En Supabase (PostgreSQL), activar Row Level Security (RLS) en todas las tablas
         # para bloquear el acceso público desde la API REST (PostgREST) y eliminar las alertas de vulnerabilidad.
         if es_pg:
-            nombres_tablas = ["usuarios", "perfil", "comidas", "historial_peso", "ayuno", "historial_ayunos"]
+            nombres_tablas = [
+                "usuarios", "perfil", "comidas", "historial_peso",
+                "ayuno", "historial_ayunos", "ejercicios"
+            ]
             for nombre_t in nombres_tablas:
                 try:
                     c.execute(f"ALTER TABLE {nombre_t} ENABLE ROW LEVEL SECURITY;")
@@ -439,5 +452,74 @@ def obtener_resumen_dias(usuario, fechas_lista):
         )
         filas = c.fetchall()
         return {fila[0]: (int(fila[1] or 0), int(fila[2] or 0)) for fila in filas}
+    finally:
+        conn.close()
+
+
+# --- FUNCIONES DE EJERCICIO Y GASTO CALÓRICO ---
+def agregar_ejercicio(usuario, fecha_sel, nombre, duracion_min, kcal_quemadas):
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        p = _ph(es_pg, 5)
+        c.execute(
+            f"INSERT INTO ejercicios (usuario, fecha, nombre, duracion_min, kcal_quemadas) VALUES ({p})",
+            (usuario, str(fecha_sel), str(nombre)[:150], int(duracion_min), int(kcal_quemadas))
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def obtener_ejercicios_por_fecha(usuario, fecha_sel):
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        c.execute(
+            f"SELECT id, nombre, duracion_min, kcal_quemadas FROM ejercicios WHERE usuario = {s} AND fecha = {s}",
+            (usuario, str(fecha_sel))
+        )
+        return c.fetchall()
+    finally:
+        conn.close()
+
+
+def eliminar_ejercicio(id_ejercicio, usuario=None):
+    """Elimina un registro de ejercicio verificando que pertenezca al usuario autenticado."""
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        if usuario:
+            c.execute(f"DELETE FROM ejercicios WHERE id = {s} AND usuario = {s}", (id_ejercicio, usuario))
+        else:
+            c.execute(f"DELETE FROM ejercicios WHERE id = {s}", (id_ejercicio,))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def obtener_kcal_quemadas_dias(usuario, fechas_lista):
+    """Obtiene el total de calorías quemadas por ejercicio por día para una lista de fechas."""
+    if not fechas_lista:
+        return {}
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        placeholders = _ph(es_pg, len(fechas_lista))
+        parametros = [usuario] + [str(f) for f in fechas_lista]
+        c.execute(
+            f"""
+            SELECT fecha, SUM(kcal_quemadas)
+            FROM ejercicios
+            WHERE usuario = {s} AND fecha IN ({placeholders})
+            GROUP BY fecha
+            """,
+            tuple(parametros)
+        )
+        filas = c.fetchall()
+        return {fila[0]: int(fila[1] or 0) for fila in filas}
     finally:
         conn.close()

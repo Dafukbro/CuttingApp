@@ -79,3 +79,20 @@ def extraer_datos_perfil(texto_usuario, api_key):
     )
     texto_limpio = resp.text.strip().replace("```json", "").replace("```", "").strip()
     return json.loads(texto_limpio)
+
+
+def calcular_gasto_ejercicio(texto_ejercicio, peso_kg, api_key):
+    """Estima las calorías quemadas y duración en minutos según la actividad descrita y el peso del usuario."""
+    client = genai.Client(api_key=api_key)
+    prompt = f"""
+    El usuario pesa {peso_kg} kg y realizó la siguiente actividad física o entrenamiento: "{texto_ejercicio}".
+    Calcula de forma realista el gasto calórico activo (kcal quemadas) usando equivalentes metabólicos (METs) acordes a su peso corporal y la duración total estimada en minutos.
+    Devuelve ÚNICAMENTE un objeto JSON válido, sin texto adicional ni bloques markdown, con este formato exacto:
+    {{"nombre": "Resumen corto del ejercicio", "duracion_min": 0, "kcal_quemadas": 0}}
+    Usa solo números enteros.
+    """
+    resp = client.models.generate_content(
+        model="gemini-3.5-flash-lite", contents=prompt
+    )
+    texto_limpio = resp.text.strip().replace("```json", "").replace("```", "").strip()
+    return json.loads(texto_limpio)

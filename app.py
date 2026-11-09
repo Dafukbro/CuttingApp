@@ -6,8 +6,10 @@ import streamlit as st
 import database as db
 import ai_helper as ai
 
-if not hasattr(db, "cambiar_password"):
+if not hasattr(db, "agregar_ejercicio"):
     importlib.reload(db)
+if not hasattr(ai, "calcular_gasto_ejercicio"):
+    importlib.reload(ai)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
 MAX_INTENTOS_LOGIN = 5
@@ -20,7 +22,7 @@ def ahora_local():
     return datetime.now(ZONA_HORARIA)
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
-db.init_db(4)
+db.init_db(5)
 
 API_KEY = st.secrets["API_KEY"]
 
@@ -139,23 +141,36 @@ else:
     with tab_dash:
         fecha_activa = st.date_input("📅 Fecha", value=fecha_hoy(), key=f"fecha_{usuario}")
         comidas_hoy = db.obtener_comidas_por_fecha(usuario, fecha_activa)
+        ejercicios_hoy = db.obtener_ejercicios_por_fecha(usuario, fecha_activa)
 
         kcal_hoy = sum(x[2] for x in comidas_hoy)
         prot_hoy = sum(x[3] for x in comidas_hoy)
         carbs_hoy = sum(x[4] for x in comidas_hoy)
         grasas_hoy = sum(x[5] for x in comidas_hoy)
-        kcal_restantes = meta_kcal - kcal_hoy
+        kcal_quemadas_hoy = sum(x[3] for x in ejercicios_hoy)
+
+        meta_kcal_ajustada = meta_kcal + kcal_quemadas_hoy
+        kcal_netas = kcal_hoy - kcal_quemadas_hoy
+        kcal_restantes = meta_kcal_ajustada - kcal_hoy
         prot_restante = meta_prot - prot_hoy
         carbs_restantes = meta_carbs - carbs_hoy
         grasas_restantes = meta_grasas - grasas_hoy
 
         with st.container(border=True):
-            st.markdown(f"🔥 **Calorías del día:** {kcal_hoy} / {meta_kcal} kcal ({int(min(kcal_hoy / max(meta_kcal, 1), 1.0) * 100)}%)")
-            st.progress(min(kcal_hoy / max(meta_kcal, 1), 1.0))
+            st.markdown(
+                f"🔥 **Balance del día:** {kcal_hoy} consumidas − {kcal_quemadas_hoy} quemadas = "
+                f"**{kcal_netas} kcal netas** (Meta base: {meta_kcal} kcal)"
+            )
+            st.progress(min(max(kcal_hoy, 0) / max(meta_kcal_ajustada, 1), 1.0))
 
             col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("Kcal Restantes", f"{kcal_restantes}", delta="En meta" if kcal_restantes >= 0 else f"Exceso ({abs(kcal_restantes)})", delta_color="normal" if kcal_restantes >= 0 else "inverse")
+                st.metric(
+                    "Kcal Restantes",
+                    f"{kcal_restantes}",
+                    delta=f"+{kcal_quemadas_hoy} por ejercicio" if kcal_quemadas_hoy > 0 and kcal_restantes >= 0 else ("En meta" if kcal_restantes >= 0 else f"Exceso ({abs(kcal_restantes)})"),
+                    delta_color="normal" if kcal_restantes >= 0 else "inverse"
+                )
             with col2:
                 st.metric("🥩 Proteína", f"{prot_hoy}g / {meta_prot}g", f"Faltan {max(prot_restante, 0)}g" if prot_restante > 0 else "¡Meta lograda!")
                 st.progress(min(prot_hoy / max(meta_prot, 1), 1.0))
@@ -182,10 +197,26 @@ else:
                             db.eliminar_comida(id_c, usuario)
                             st.rerun()
 
+        st.subheader("🏃 Ejercicio realizado hoy")
+        if not ejercicios_hoy:
+            st.caption("No has registrado actividad física hoy. Puedes agregarla en la pestaña **➕ Registro**.")
+        else:
+            for id_ej, nom_ej, dur_ej, kcal_ej in ejercicios_hoy:
+                with st.container(border=True):
+                    col_et, col_eb = st.columns([5, 1])
+                    with col_et:
+                        st.markdown(f"**{nom_ej}**")
+                        st.caption(f"⏱️ **{dur_ej} min** ｜ 🔥 **-{kcal_ej} kcal quemadas**")
+                    with col_eb:
+                        if st.button("🗑️", key=f"del_ej_{usuario}_{id_ej}"):
+                            db.eliminar_ejercicio(id_ej, usuario)
+                            st.rerun()
+
         st.divider()
         st.subheader("📊 Balance Semanal (Últimos 7 días)")
         fechas_7d = [fecha_activa - timedelta(days=i) for i in range(6, -1, -1)]
         resumen_7d = db.obtener_resumen_dias(usuario, fechas_7d)
+        quemadas_7d = db.obtener_kcal_quemadas_dias(usuario, fechas_7d)
         dias_con_registro = len(resumen_7d)
 
         if dias_con_registro == 0:
@@ -193,19 +224,26 @@ else:
         else:
             total_kcal_sem = sum(v[0] for v in resumen_7d.values())
             total_prot_sem = sum(v[1] for v in resumen_7d.values())
+            total_quemadas_sem = sum(quemadas_7d.values())
             prom_kcal = int(total_kcal_sem / dias_con_registro)
             prom_prot = int(total_prot_sem / dias_con_registro)
-            dias_en_meta = sum(1 for v in resumen_7d.values() if v[0] <= meta_kcal + 100)
+            dias_en_meta = sum(
+                1 for f_key, v in resumen_7d.items()
+                if v[0] <= (meta_kcal + quemadas_7d.get(f_key, 0) + 100)
+            )
 
-            # Mantenimiento estimado = meta_kcal + 400 kcal. 1g de tejido adiposo ≈ 7.7 kcal
+            # Mantenimiento estimado = meta_kcal + 400 kcal + calorías quemadas por ejercicio ese día
             mantenimiento_est = meta_kcal + 400
-            deficit_acumulado = sum((mantenimiento_est - v[0]) for v in resumen_7d.values())
+            deficit_acumulado = sum(
+                (mantenimiento_est + quemadas_7d.get(f_key, 0) - v[0])
+                for f_key, v in resumen_7d.items()
+            )
             grasa_oxidada_g = max(int(deficit_acumulado / 7.7), 0)
 
             with st.container(border=True):
                 col_s1, col_s2, col_s3 = st.columns(3)
-                col_s1.metric("Promedio Diario", f"{prom_kcal} kcal", f"🥩 {prom_prot}g Prot/día")
-                col_s2.metric("Días en Meta", f"{dias_en_meta} / {dias_con_registro}", "Últimos 7 días")
+                col_s1.metric("Promedio Consumido", f"{prom_kcal} kcal", f"🥩 {prom_prot}g Prot/día")
+                col_s2.metric("Ejercicio Semanal", f"-{total_quemadas_sem} kcal", f"En meta: {dias_en_meta}/{dias_con_registro} días")
                 col_s3.metric(
                     "🔥 Grasa Oxidada Est.",
                     f"{grasa_oxidada_g} g",
@@ -270,6 +308,42 @@ else:
                     st.rerun()
                 else:
                     st.warning("Escribe el nombre del alimento para guardarlo.")
+
+        st.divider()
+        st.subheader("🏃 Registrar Ejercicio (Gasto Calórico)")
+        with st.container(border=True):
+            st.markdown("##### 🤖 Calcular gasto con IA (según tu peso actual)")
+            ej_texto = st.text_input(
+                "Describe tu entrenamiento o cardio",
+                placeholder="Ej. 45 min de pesas de torso y 20 min de caminadora inclinada",
+                key=f"ej_txt_{usuario}"
+            )
+            if st.button("🔥 Calcular y guardar ejercicio", use_container_width=True, key=f"btn_ej_ia_{usuario}") and ej_texto:
+                with st.spinner("Calculando calorías quemadas según tu peso..."):
+                    try:
+                        datos_ej = ai.calcular_gasto_ejercicio(ej_texto, peso, API_KEY)
+                        db.agregar_ejercicio(
+                            usuario, fecha_activa,
+                            datos_ej["nombre"], datos_ej["duracion_min"], datos_ej["kcal_quemadas"]
+                        )
+                        st.success(f"Registrado: {datos_ej['nombre']} (-{datos_ej['kcal_quemadas']} kcal)")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error al calcular ejercicio: {e}")
+
+            st.divider()
+            st.markdown("##### ⌚ Registro manual de ejercicio (Smartwatch / Máquina)")
+            col_e1, col_e2, col_e3 = st.columns([2, 1, 1])
+            nom_ej_man = col_e1.text_input("Actividad", placeholder="Ej. Cardio HIIT / Pesas", key=f"man_ej_nom_{usuario}").strip()
+            dur_ej_man = col_e2.number_input("Minutos", min_value=1, max_value=600, value=30, step=5, key=f"man_ej_dur_{usuario}")
+            kcal_ej_man = col_e3.number_input("Kcal quemadas", min_value=1, max_value=5000, value=200, step=10, key=f"man_ej_kcal_{usuario}")
+            if st.button("➕ Guardar ejercicio manual", use_container_width=True, key=f"btn_ej_man_{usuario}"):
+                if nom_ej_man:
+                    db.agregar_ejercicio(usuario, fecha_activa, nom_ej_man, int(dur_ej_man), int(kcal_ej_man))
+                    st.success(f"Registrado: {nom_ej_man} (-{kcal_ej_man} kcal)")
+                    st.rerun()
+                else:
+                    st.warning("Escribe el nombre de la actividad.")
 
     # --- PESTAÑA 3: AYUNO INTERMITENTE (Heurísticas: Visibilidad, Mundo Real, Control y Prevención de Errores) ---
     with tab_ayuno:
@@ -456,13 +530,15 @@ else:
                     st.markdown(pregunta)
                 
                 lista_comidas_str = ", ".join([f"{nom} ({k} kcal, {p}g P, {c}g C, {g}g G)" for _, nom, k, p, c, g in comidas_hoy]) if comidas_hoy else "Ninguna hoy."
+                lista_ej_str = ", ".join([f"{nom_e} ({dur_e} min, -{kcal_e} kcal)" for _, nom_e, dur_e, kcal_e in ejercicios_hoy]) if ejercicios_hoy else "Ninguno registrado hoy."
                 estado_ayuno_str = "No está en ayuno actualmente."
                 if ayuno_activo:
                     estado_ayuno_str = f"En ayuno activo ({h_trans}h {m_trans}m completadas de una meta de {horas_meta}h)."
                 contexto = (
                     f"Usuario: {usuario}. Perfil: {peso}kg. "
-                    f"Metas diarias: {meta_kcal}kcal, {meta_prot}g P, {meta_carbs}g C, {meta_grasas}g G. "
-                    f"Lleva hoy: {kcal_hoy}kcal, {prot_hoy}g P, {carbs_hoy}g C, {grasas_hoy}g G. "
+                    f"Metas diarias base: {meta_kcal}kcal, {meta_prot}g P, {meta_carbs}g C, {meta_grasas}g G. "
+                    f"Lleva consumido hoy: {kcal_hoy}kcal, {prot_hoy}g P, {carbs_hoy}g C, {grasas_hoy}g G. "
+                    f"Ejercicio hoy: quemó {kcal_quemadas_hoy}kcal ({lista_ej_str}). Balance neto: {kcal_netas}kcal. "
                     f"Ayuno intermitente: {estado_ayuno_str} "
                     f"Comió: {lista_comidas_str}."
                 )
