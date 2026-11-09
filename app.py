@@ -20,7 +20,7 @@ def ahora_local():
     return datetime.now(ZONA_HORARIA)
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
-db.init_db(3)
+db.init_db(4)
 
 API_KEY = st.secrets["API_KEY"]
 

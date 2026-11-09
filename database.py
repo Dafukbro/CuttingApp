@@ -76,7 +76,7 @@ def _ph(es_pg, cantidad=1):
 
 
 @st.cache_resource
-def init_db(_version=3):
+def init_db(_version=4):
     conn, es_pg = _conectar()
     try:
         c = conn.cursor()
@@ -137,6 +137,17 @@ def init_db(_version=3):
                 conn.commit()
             except Exception:
                 conn.rollback()
+
+        # En Supabase (PostgreSQL), activar Row Level Security (RLS) en todas las tablas
+        # para bloquear el acceso público desde la API REST (PostgREST) y eliminar las alertas de vulnerabilidad.
+        if es_pg:
+            nombres_tablas = ["usuarios", "perfil", "comidas", "historial_peso", "ayuno", "historial_ayunos"]
+            for nombre_t in nombres_tablas:
+                try:
+                    c.execute(f"ALTER TABLE {nombre_t} ENABLE ROW LEVEL SECURITY;")
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
     finally:
         conn.close()
     return True
