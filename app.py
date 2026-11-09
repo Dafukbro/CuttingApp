@@ -181,66 +181,63 @@ else:
                 st.metric("🥑 Grasas", f"{grasas_hoy}g / {meta_grasas}g", f"Restan {grasas_restantes}g" if grasas_restantes >= 0 else f"+{abs(grasas_restantes)}g")
                 st.progress(min(grasas_hoy / max(meta_grasas, 1), 1.0))
         
-        st.divider()
-        st.subheader("📋 Consumido hoy")
-        if not comidas_hoy:
-            st.info("No has registrado comidas aún.")
-        else:
-            for id_c, nom, k, p, c, g in comidas_hoy:
-                with st.container(border=True):
-                    col_t, col_b = st.columns([5, 1])
-                    with col_t:
-                        st.markdown(f"**{nom}**")
-                        st.caption(f"🔥 **{k} kcal** ｜ 🥩 **{p}g** Prot ｜ 🍚 **{c}g** Carbs ｜ 🥑 **{g}g** Grasas")
-                    with col_b:
-                        if st.button("🗑️", key=f"del_{usuario}_{id_c}"):
-                            db.eliminar_comida(id_c, usuario)
-                            st.rerun()
+        with st.expander(f"📋 Consumido hoy ({len(comidas_hoy)} comidas — {kcal_hoy} kcal)", expanded=True):
+            if not comidas_hoy:
+                st.info("No has registrado comidas aún.")
+            else:
+                for id_c, nom, k, p, c, g in comidas_hoy:
+                    with st.container(border=True):
+                        col_t, col_b = st.columns([5, 1])
+                        with col_t:
+                            st.markdown(f"**{nom}**")
+                            st.caption(f"🔥 **{k} kcal** ｜ 🥩 **{p}g** Prot ｜ 🍚 **{c}g** Carbs ｜ 🥑 **{g}g** Grasas")
+                        with col_b:
+                            if st.button("🗑️", key=f"del_{usuario}_{id_c}"):
+                                db.eliminar_comida(id_c, usuario)
+                                st.rerun()
 
-        st.subheader("🏃 Ejercicio realizado hoy")
-        if not ejercicios_hoy:
-            st.caption("No has registrado actividad física hoy. Puedes agregarla en la pestaña **➕ Registro**.")
-        else:
-            for id_ej, nom_ej, dur_ej, kcal_ej in ejercicios_hoy:
-                with st.container(border=True):
-                    col_et, col_eb = st.columns([5, 1])
-                    with col_et:
-                        st.markdown(f"**{nom_ej}**")
-                        st.caption(f"⏱️ **{dur_ej} min** ｜ 🔥 **-{kcal_ej} kcal quemadas**")
-                    with col_eb:
-                        if st.button("🗑️", key=f"del_ej_{usuario}_{id_ej}"):
-                            db.eliminar_ejercicio(id_ej, usuario)
-                            st.rerun()
+        with st.expander(f"🏃 Ejercicio realizado hoy ({len(ejercicios_hoy)} sesiones — -{kcal_quemadas_hoy} kcal)", expanded=False):
+            if not ejercicios_hoy:
+                st.caption("No has registrado actividad física hoy. Puedes agregarla en la pestaña **➕ Registro**.")
+            else:
+                for id_ej, nom_ej, dur_ej, kcal_ej in ejercicios_hoy:
+                    with st.container(border=True):
+                        col_et, col_eb = st.columns([5, 1])
+                        with col_et:
+                            st.markdown(f"**{nom_ej}**")
+                            st.caption(f"⏱️ **{dur_ej} min** ｜ 🔥 **-{kcal_ej} kcal quemadas**")
+                        with col_eb:
+                            if st.button("🗑️", key=f"del_ej_{usuario}_{id_ej}"):
+                                db.eliminar_ejercicio(id_ej, usuario)
+                                st.rerun()
 
-        st.divider()
-        st.subheader("📊 Balance Semanal (Últimos 7 días)")
-        fechas_7d = [fecha_activa - timedelta(days=i) for i in range(6, -1, -1)]
-        resumen_7d = db.obtener_resumen_dias(usuario, fechas_7d)
-        quemadas_7d = db.obtener_kcal_quemadas_dias(usuario, fechas_7d)
-        dias_con_registro = len(resumen_7d)
+        with st.expander("📊 Balance Semanal (Últimos 7 días)", expanded=False):
+            fechas_7d = [fecha_activa - timedelta(days=i) for i in range(6, -1, -1)]
+            resumen_7d = db.obtener_resumen_dias(usuario, fechas_7d)
+            quemadas_7d = db.obtener_kcal_quemadas_dias(usuario, fechas_7d)
+            dias_con_registro = len(resumen_7d)
 
-        if dias_con_registro == 0:
-            st.caption("Registra tus comidas durante la semana para ver tu promedio de calorías y la grasa estimada oxidada.")
-        else:
-            total_kcal_sem = sum(v[0] for v in resumen_7d.values())
-            total_prot_sem = sum(v[1] for v in resumen_7d.values())
-            total_quemadas_sem = sum(quemadas_7d.values())
-            prom_kcal = int(total_kcal_sem / dias_con_registro)
-            prom_prot = int(total_prot_sem / dias_con_registro)
-            dias_en_meta = sum(
-                1 for f_key, v in resumen_7d.items()
-                if v[0] <= (meta_kcal + quemadas_7d.get(f_key, 0) + 100)
-            )
+            if dias_con_registro == 0:
+                st.caption("Registra tus comidas durante la semana para ver tu promedio de calorías y la grasa estimada oxidada.")
+            else:
+                total_kcal_sem = sum(v[0] for v in resumen_7d.values())
+                total_prot_sem = sum(v[1] for v in resumen_7d.values())
+                total_quemadas_sem = sum(quemadas_7d.values())
+                prom_kcal = int(total_kcal_sem / dias_con_registro)
+                prom_prot = int(total_prot_sem / dias_con_registro)
+                dias_en_meta = sum(
+                    1 for f_key, v in resumen_7d.items()
+                    if v[0] <= (meta_kcal + quemadas_7d.get(f_key, 0) + 100)
+                )
 
-            # Mantenimiento estimado = meta_kcal + 400 kcal + calorías quemadas por ejercicio ese día
-            mantenimiento_est = meta_kcal + 400
-            deficit_acumulado = sum(
-                (mantenimiento_est + quemadas_7d.get(f_key, 0) - v[0])
-                for f_key, v in resumen_7d.items()
-            )
-            grasa_oxidada_g = max(int(deficit_acumulado / 7.7), 0)
+                # Mantenimiento estimado = meta_kcal + 400 kcal + calorías quemadas por ejercicio ese día
+                mantenimiento_est = meta_kcal + 400
+                deficit_acumulado = sum(
+                    (mantenimiento_est + quemadas_7d.get(f_key, 0) - v[0])
+                    for f_key, v in resumen_7d.items()
+                )
+                grasa_oxidada_g = max(int(deficit_acumulado / 7.7), 0)
 
-            with st.container(border=True):
                 col_s1, col_s2, col_s3 = st.columns(3)
                 col_s1.metric("Promedio Consumido", f"{prom_kcal} kcal", f"🥩 {prom_prot}g Prot/día")
                 col_s2.metric("Ejercicio Semanal", f"-{total_quemadas_sem} kcal", f"En meta: {dias_en_meta}/{dias_con_registro} días")
@@ -251,48 +248,46 @@ else:
                 )
                 st.bar_chart({str(f)[5:]: resumen_7d.get(str(f), (0, 0))[0] for f in fechas_7d})
 
-        st.divider()
-        st.subheader("⚖️ Evolución de Peso")
-        col_p1, col_p2 = st.columns([2, 1])
-        peso_hoy_input = col_p1.number_input("Peso (kg)", value=float(peso), step=0.1, key=f"peso_diario_{usuario}")
-        if col_p2.button("Guardar", key=f"btn_peso_{usuario}"):
-            db.registrar_peso_diario(usuario, fecha_activa, peso_hoy_input)
-            st.rerun()
-        historial = db.obtener_historial_peso(usuario)
-        if historial:
-            st.line_chart({fila[0]: fila[1] for fila in historial[-14:]}) # Últimos 14 días para no saturar
+        with st.expander(f"⚖️ Evolución de Peso (Actual: {peso} kg)", expanded=False):
+            col_p1, col_p2 = st.columns([2, 1])
+            peso_hoy_input = col_p1.number_input("Peso (kg)", value=float(peso), step=0.1, key=f"peso_diario_{usuario}")
+            if col_p2.button("Guardar", key=f"btn_peso_{usuario}"):
+                db.registrar_peso_diario(usuario, fecha_activa, peso_hoy_input)
+                st.rerun()
+            historial = db.obtener_historial_peso(usuario)
+            if historial:
+                st.line_chart({fila[0]: fila[1] for fila in historial[-14:]})
 
-    # --- PESTAÑA 2: REGISTRO (Prevención de errores y flexibilidad) ---
+    # --- PESTAÑA 2: REGISTRO (Desplegables para evitar saturación visual) ---
     with tab_reg:
-        st.subheader("📸 Escáner Visual")
-        foto_plato = st.file_uploader("Toma o sube una foto", type=["jpg", "jpeg", "png"], key=f"foto_{usuario}")
-        if foto_plato and st.button("Analizar foto", use_container_width=True, key=f"btn_foto_{usuario}"):
-            with st.spinner("Analizando..."):
-                try:
-                    datos = ai.calcular_macros_imagen(foto_plato, API_KEY)
-                    db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
-                    st.success(f"Guardado: {datos['nombre']}")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Fallo en servidor de IA, intenta más tarde. Detalle: {e}")
+        st.caption("Selecciona cómo deseas registrar tu comida o entrenamiento de hoy:")
 
-        st.divider()
-        st.subheader("✍️ Registro por Texto (IA)")
-        comida_ia = st.text_input("¿Qué comiste?", placeholder="Ej. 200g pollo y arroz", key=f"comida_txt_{usuario}")
-        if st.button("Calcular macros", use_container_width=True, key=f"btn_txt_{usuario}") and comida_ia:
-            with st.spinner("Calculando..."):
-                try:
-                    datos = ai.calcular_macros_texto(comida_ia, API_KEY)
-                    db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
-                    st.success("Guardado correctamente.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
+        with st.expander("✍️ Registrar Comida por Texto con IA", expanded=True):
+            comida_ia = st.text_input("¿Qué comiste?", placeholder="Ej. 200g pollo y arroz", key=f"comida_txt_{usuario}")
+            if st.button("Calcular macros", use_container_width=True, key=f"btn_txt_{usuario}") and comida_ia:
+                with st.spinner("Calculando..."):
+                    try:
+                        datos = ai.calcular_macros_texto(comida_ia, API_KEY)
+                        db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
+                        st.success("Guardado correctamente.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Error: {e}")
 
-        st.divider()
-        st.subheader("🏷️ Registro Manual Rápido (Etiqueta Nutricional)")
-        st.caption("Ideal cuando ya conoces los valores de un empaque o porción. Si dejas Kcal en 0, se calcularán automáticamente a partir de los macros.")
-        with st.container(border=True):
+        with st.expander("📸 Escáner Visual (Foto del plato)", expanded=False):
+            foto_plato = st.file_uploader("Toma o sube una foto", type=["jpg", "jpeg", "png"], key=f"foto_{usuario}")
+            if foto_plato and st.button("Analizar foto", use_container_width=True, key=f"btn_foto_{usuario}"):
+                with st.spinner("Analizando..."):
+                    try:
+                        datos = ai.calcular_macros_imagen(foto_plato, API_KEY)
+                        db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
+                        st.success(f"Guardado: {datos['nombre']}")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fallo en servidor de IA, intenta más tarde. Detalle: {e}")
+
+        with st.expander("🏷️ Registro Manual Rápido (Etiqueta Nutricional)", expanded=False):
+            st.caption("Ideal cuando ya conoces los valores de un empaque o porción. Si dejas Kcal en 0, se calcularán automáticamente a partir de los macros.")
             nom_manual = st.text_input("Nombre del alimento o comida", placeholder="Ej. Yogurt Griego / Scoop de Whey", key=f"man_nom_{usuario}").strip()
             col_m1, col_m2, col_m3, col_m4 = st.columns(4)
             kcal_man = col_m1.number_input("Kcal", min_value=0, max_value=5000, value=0, step=10, key=f"man_kcal_{usuario}")
@@ -309,9 +304,7 @@ else:
                 else:
                     st.warning("Escribe el nombre del alimento para guardarlo.")
 
-        st.divider()
-        st.subheader("🏃 Registrar Ejercicio (Gasto Calórico)")
-        with st.container(border=True):
+        with st.expander("🏃 Registrar Ejercicio (Gasto Calórico)", expanded=False):
             st.markdown("##### 🤖 Calcular gasto con IA (según tu peso actual)")
             ej_texto = st.text_input(
                 "Describe tu entrenamiento o cardio",
@@ -474,23 +467,22 @@ else:
                 "- ❌ **Rompe el ayuno:** Azúcar, leche, crema, aceite, caldos con grasa, proteína en polvo o snacks."
             )
 
-        st.divider()
-        st.subheader("📜 Historial de Ayunos")
-        hist_ayunos = db.obtener_historial_ayunos(usuario)
-        if not hist_ayunos:
-            st.info("Aún no tienes ayunos completados registrados.")
-        else:
-            for id_ay, f_ay, prot_ay, h_comp, h_m in hist_ayunos:
-                cumplido = "✅ Meta cumplida" if h_comp >= h_m else "⚠️ Parcial"
-                with st.container(border=True):
-                    col_h1, col_h2 = st.columns([5, 1])
-                    with col_h1:
-                        st.markdown(f"📅 **{f_ay}** — Protocolo **{prot_ay}** ({cumplido})")
-                        st.caption(f"⏱️ Duración completada: **{h_comp:.1f} horas** de {h_m}h objetivo")
-                    with col_h2:
-                        if st.button("🗑️", key=f"del_ayuno_{usuario}_{id_ay}"):
-                            db.eliminar_historial_ayuno(id_ay, usuario)
-                            st.rerun()
+        with st.expander("📜 Historial de Ayunos", expanded=False):
+            hist_ayunos = db.obtener_historial_ayunos(usuario)
+            if not hist_ayunos:
+                st.info("Aún no tienes ayunos completados registrados.")
+            else:
+                for id_ay, f_ay, prot_ay, h_comp, h_m in hist_ayunos:
+                    cumplido = "✅ Meta cumplida" if h_comp >= h_m else "⚠️ Parcial"
+                    with st.container(border=True):
+                        col_h1, col_h2 = st.columns([5, 1])
+                        with col_h1:
+                            st.markdown(f"📅 **{f_ay}** — Protocolo **{prot_ay}** ({cumplido})")
+                            st.caption(f"⏱️ Duración completada: **{h_comp:.1f} horas** de {h_m}h objetivo")
+                        with col_h2:
+                            if st.button("🗑️", key=f"del_ayuno_{usuario}_{id_ay}"):
+                                db.eliminar_historial_ayuno(id_ay, usuario)
+                                st.rerun()
 
     # --- PESTAÑA 4: CHAT IA ---
     with tab_ia:
