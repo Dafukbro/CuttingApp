@@ -4,36 +4,55 @@ from google.genai import types
 from PIL import Image
 
 MODELO_IA = "gemini-4-hydrogen"
-MODELO_RESPALDO = "gemini-3.8-flash"
 
-CONFIG_BAJO_RAZONAMIENTO = types.GenerateContentConfig(
+# Cadena de modelos con cuotas diarias independientes en el Free Tier de Google AI Studio.
+# Si el modelo principal presenta 503 (alta demanda) o 429 (límite diario de ese modelo),
+# pasa automáticamente al siguiente modelo disponible sin interrumpir al usuario.
+CADENA_MODELOS = [
+    "gemini-4-hydrogen",
+    "gemini-3.5-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-2.5-flash",
+]
+
+CONFIG_HYDROGEN = types.GenerateContentConfig(
     thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+    temperature=0.2,
+)
+
+CONFIG_ESTANDAR = types.GenerateContentConfig(
     temperature=0.2,
 )
 
 
 def _cliente(api_key):
-    """Crea cliente con máximo 1 intento por modelo para evitar esperas largas si hay pico de demanda (503)."""
+    """Crea cliente con 1 intento por modelo para saltar de inmediato al siguiente si hay error 429 o 503."""
     return genai.Client(api_key=api_key, http_options={"retry_options": {"attempts": 1}})
 
 
+def _config_para_modelo(modelo):
+    return CONFIG_HYDROGEN if "hydrogen" in modelo else CONFIG_ESTANDAR
+
+
 def _generar(api_key, contents):
-    """Llama a gemini-4-hydrogen con razonamiento bajo; si devuelve 503 por alta demanda, usa respaldo inmediato."""
+    """Recorre la cadena de modelos hasta obtener respuesta, evitando bloqueos por cuota (429) o demanda (503)."""
     client = _cliente(api_key)
-    try:
-        resp = client.models.generate_content(
-            model=MODELO_IA,
-            contents=contents,
-            config=CONFIG_BAJO_RAZONAMIENTO
-        )
-        return resp.text
-    except Exception:
-        resp_fb = client.models.generate_content(
-            model=MODELO_RESPALDO,
-            contents=contents,
-            config=CONFIG_BAJO_RAZONAMIENTO
-        )
-        return resp_fb.text
+    ultimo_error = None
+    for modelo in CADENA_MODELOS:
+        try:
+            resp = client.models.generate_content(
+                model=modelo,
+                contents=contents,
+                config=_config_para_modelo(modelo)
+            )
+            if resp and resp.text:
+                return resp.text
+        except Exception as e:
+            ultimo_error = e
+            continue
+    raise ultimo_error
 
 
 def _limpiar_json(texto):
@@ -47,7 +66,7 @@ def _limpiar_json(texto):
 
 
 def calcular_macros_texto(texto_comida, api_key):
-    """Analiza una comida descrita en texto con Gemini Hydrogen en modo de razonamiento bajo."""
+    """Analiza una comida descrita en texto con Gemini Hydrogen (y rotación automática de cuota)."""
     prompt_calculo = f"""
     Analiza esta comida y todos sus ingredientes (incluyendo cocción, aceites, salsas o aderezos): "{texto_comida}".
     Calcula calorías, proteínas, carbohidratos y grasas totales coherentes entre sí (4 kcal/g P, 4 kcal/g C, 9 kcal/g G).
@@ -84,28 +103,27 @@ def consultar_asistente_stream(pregunta, contexto_macros, api_key, historial_cha
 
     Usuario: {pregunta}
     """
-    try:
-        respuesta = client.models.generate_content_stream(
-            model=MODELO_IA,
-            contents=prompt_completo,
-            config=CONFIG_BAJO_RAZONAMIENTO
-        )
-        for fragmento in respuesta:
-            if fragmento.text:
-                yield fragmento.text
-    except Exception:
-        respuesta_fb = client.models.generate_content_stream(
-            model=MODELO_RESPALDO,
-            contents=prompt_completo,
-            config=CONFIG_BAJO_RAZONAMIENTO
-        )
-        for fragmento in respuesta_fb:
-            if fragmento.text:
-                yield fragmento.text
+    ultimo_error = None
+    for modelo in CADENA_MODELOS:
+        try:
+            respuesta = client.models.generate_content_stream(
+                model=modelo,
+                contents=prompt_completo,
+                config=_config_para_modelo(modelo)
+            )
+            for fragmento in respuesta:
+                if fragmento.text:
+                    yield fragmento.text
+            return
+        except Exception as e:
+            ultimo_error = e
+            continue
+    if ultimo_error:
+        raise ultimo_error
 
 
 def calcular_macros_imagen(imagen_archivo, api_key):
-    """Analiza visualmente la foto de un plato o etiqueta nutricional con Gemini Hydrogen (razonamiento bajo)."""
+    """Analiza visualmente la foto de un plato o etiqueta nutricional con Gemini Hydrogen."""
     img = Image.open(imagen_archivo)
     img.thumbnail((1024, 1024))
     prompt = """

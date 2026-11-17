@@ -8,7 +8,7 @@ import ai_helper as ai
 
 if not hasattr(db, "_sesion_db"):
     importlib.reload(db)
-if not hasattr(ai, "_generar"):
+if not hasattr(ai, "CADENA_MODELOS"):
     importlib.reload(ai)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
