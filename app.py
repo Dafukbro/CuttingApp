@@ -8,7 +8,7 @@ import ai_helper as ai
 
 if not hasattr(db, "recuperar_password_pregunta"):
     importlib.reload(db)
-if not hasattr(ai, "calcular_gasto_ejercicio"):
+if getattr(ai, "MODELO_IA", "") != "gemini-4-hydrogen":
     importlib.reload(ai)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
@@ -640,13 +640,25 @@ else:
                 estado_ayuno_str = "No está en ayuno actualmente."
                 if ayuno_activo:
                     estado_ayuno_str = f"En ayuno activo ({h_trans}h {m_trans}m completadas de una meta de {horas_meta}h)."
+
+                alt_cm_ctx = float(altura) * 100.0 if float(altura) < 3.0 else float(altura)
+                mant_aprox = int(((10.0 * float(peso)) + (6.25 * alt_cm_ctx) - (5.0 * int(edad)) + 5.0) * 1.55)
+                if meta_kcal < mant_aprox - 150:
+                    etapa_actual = "Definición / Pérdida de grasa (Déficit calórico)"
+                elif meta_kcal > mant_aprox + 150:
+                    etapa_actual = "Volumen / Hipertrofia (Superávit calórico)"
+                else:
+                    etapa_actual = "Mantenimiento / Recomposición corporal"
+
                 contexto = (
-                    f"Usuario: {usuario}. Perfil: {peso}kg. "
-                    f"Metas diarias base: {meta_kcal}kcal, {meta_prot}g P, {meta_carbs}g C, {meta_grasas}g G. "
-                    f"Lleva consumido hoy: {kcal_hoy}kcal, {prot_hoy}g P, {carbs_hoy}g C, {grasas_hoy}g G. "
-                    f"Ejercicio hoy: quemó {kcal_quemadas_hoy}kcal ({lista_ej_str}). Balance neto: {kcal_netas}kcal. "
+                    f"Usuario: {usuario}. Perfil físico: {peso}kg, {alt_cm_ctx:.0f}cm, {edad} años. "
+                    f"Etapa actual: {etapa_actual}. "
+                    f"Metas diarias base: {meta_kcal}kcal, {meta_prot}g Proteína, {meta_carbs}g Carbs, {meta_grasas}g Grasas. "
+                    f"Consumido hoy: {kcal_hoy}kcal, {prot_hoy}g P, {carbs_hoy}g C, {grasas_hoy}g G. "
+                    f"Ejercicio hoy: quemó {kcal_quemadas_hoy}kcal ({lista_ej_str}). "
+                    f"Restante para hoy: {kcal_restantes}kcal disponibles, faltan {max(prot_restante, 0)}g P, restan {carbs_restantes}g C y {grasas_restantes}g G. "
                     f"Ayuno intermitente: {estado_ayuno_str} "
-                    f"Comió: {lista_comidas_str}."
+                    f"Comidas registradas hoy: {lista_comidas_str}."
                 )
                 
                 with st.chat_message("assistant"):
