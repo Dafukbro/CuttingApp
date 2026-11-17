@@ -6,7 +6,7 @@ import streamlit as st
 import database as db
 import ai_helper as ai
 
-if not hasattr(db, "agregar_ejercicio"):
+if not hasattr(db, "recuperar_password_pregunta"):
     importlib.reload(db)
 if not hasattr(ai, "calcular_gasto_ejercicio"):
     importlib.reload(ai)
@@ -53,8 +53,16 @@ def calcular_macros_objetivo(peso_kg, altura_val, edad_val, objetivo_key, activi
     meta_carbs = max(int((meta_kcal - (meta_prot * 4) - (meta_grasas * 9)) / 4), 50)
     return meta_kcal, meta_prot, meta_carbs, meta_grasas, round(altura_cm, 1)
 
+PREGUNTAS_SEGURIDAD = [
+    "¿Cuál era el nombre de tu primera mascota?",
+    "¿En qué ciudad o barrio creciste?",
+    "¿Cuál es tu comida favorita?",
+    "¿Cuál era el apodo de tu infancia?",
+    "¿Cuál es tu videojuego, serie o película favorita?",
+]
+
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
-db.init_db(5)
+db.init_db(7)
 
 API_KEY = st.secrets["API_KEY"]
 
@@ -68,7 +76,7 @@ if "bloqueo_hasta" not in st.session_state:
 
 if not st.session_state.usuario:
     st.title("🔐 Acceso a Cutting Tracker")
-    tab_login, tab_registro = st.tabs(["Iniciar Sesión", "Registrarse"])
+    tab_login, tab_registro, tab_recuperar = st.tabs(["Iniciar Sesión", "Registrarse", "🔑 Recuperar Contraseña"])
 
     with tab_login:
         tiempo_restante_bloqueo = int(st.session_state.bloqueo_hasta - time.time())
@@ -101,9 +109,14 @@ if not st.session_state.usuario:
         user_reg = st.text_input("Nuevo Usuario (letras, números o guion bajo)", max_chars=30, key="reg_user").strip()
         pass_reg = st.text_input("Nueva Contraseña (mínimo 6 caracteres)", type="password", max_chars=128, key="reg_pass")
         pass_reg_conf = st.text_input("Confirmar Contraseña", type="password", max_chars=128, key="reg_pass_conf")
-        if st.button("Crear Cuenta", use_container_width=True):
-            if not user_reg or not pass_reg or not pass_reg_conf:
-                st.warning("Completa todos los campos.")
+        st.divider()
+        st.caption("🛡️ **Pregunta de Seguridad** (te permitirá recuperar tu cuenta si olvidas la contraseña):")
+        preg_reg = st.selectbox("Elige una pregunta de seguridad", PREGUNTAS_SEGURIDAD, key="reg_preg")
+        resp_reg = st.text_input("Tu respuesta secreta", max_chars=100, key="reg_resp").strip()
+
+        if st.button("Crear Cuenta", type="primary", use_container_width=True):
+            if not user_reg or not pass_reg or not pass_reg_conf or not resp_reg:
+                st.warning("Completa todos los campos (incluyendo la respuesta de seguridad).")
             elif not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", user_reg):
                 st.error("El usuario debe tener entre 3 y 30 caracteres (solo letras, números, puntos, guiones o guion bajo, sin espacios).")
             elif len(pass_reg) < 6:
@@ -111,10 +124,50 @@ if not st.session_state.usuario:
             elif pass_reg != pass_reg_conf:
                 st.error("Las contraseñas no coinciden.")
             else:
-                if db.crear_usuario(user_reg, pass_reg):
+                if db.crear_usuario(user_reg, pass_reg, preg_reg, resp_reg):
                     st.success("¡Cuenta creada con éxito! Ahora puedes iniciar sesión.")
                 else:
                     st.error("Ese nombre de usuario ya existe.")
+
+    with tab_recuperar:
+        tiempo_restante_bloqueo = int(st.session_state.bloqueo_hasta - time.time())
+        if tiempo_restante_bloqueo > 0:
+            st.error(f"⏳ Demasiados intentos fallidos. Espera **{tiempo_restante_bloqueo} segundos** antes de volver a intentar.")
+        else:
+            st.caption("Ingresa tu nombre de usuario para ver tu pregunta de seguridad y restablecer tu contraseña.")
+            user_rec = st.text_input("Tu nombre de usuario", max_chars=30, key="rec_user_q").strip()
+            if user_rec:
+                existe_u, pregunta_u = db.obtener_pregunta_seguridad(user_rec)
+                if not existe_u:
+                    st.error("No existe ninguna cuenta con ese nombre de usuario.")
+                elif not pregunta_u:
+                    st.warning("Esta cuenta fue creada antes de activar las preguntas de seguridad y aún no tiene una configurada. Inicia sesión y configúrala en la pestaña **⚙️ Perfil**.")
+                else:
+                    with st.container(border=True):
+                        st.info(f"🛡️ **Pregunta de seguridad:** {pregunta_u}")
+                        resp_rec = st.text_input("Escribe tu respuesta secreta", type="password", max_chars=100, key="rec_resp_q").strip()
+                        nueva_pwd_rec = st.text_input("Nueva Contraseña (mínimo 6 caracteres)", type="password", max_chars=128, key="rec_new_pwd_q")
+                        conf_pwd_rec = st.text_input("Confirmar Nueva Contraseña", type="password", max_chars=128, key="rec_conf_pwd_q")
+
+                        if st.button("✅ Restablecer Contraseña", type="primary", use_container_width=True, key="btn_rec_q"):
+                            if not resp_rec or not nueva_pwd_rec or not conf_pwd_rec:
+                                st.warning("Completa tu respuesta y la nueva contraseña.")
+                            elif len(nueva_pwd_rec) < 6:
+                                st.error("La nueva contraseña debe tener al menos 6 caracteres.")
+                            elif nueva_pwd_rec != conf_pwd_rec:
+                                st.error("Las contraseñas no coinciden.")
+                            elif db.recuperar_password_pregunta(user_rec, resp_rec, nueva_pwd_rec):
+                                st.session_state.intentos_fallidos = 0
+                                st.success("🎉 ¡Contraseña restablecida con éxito! Ya puedes entrar en la pestaña 'Iniciar Sesión'.")
+                            else:
+                                st.session_state.intentos_fallidos += 1
+                                restantes = MAX_INTENTOS_LOGIN - st.session_state.intentos_fallidos
+                                if restantes <= 0:
+                                    st.session_state.bloqueo_hasta = time.time() + SEGUNDOS_BLOQUEO
+                                    st.session_state.intentos_fallidos = 0
+                                    st.rerun()
+                                else:
+                                    st.error(f"Respuesta incorrecta. Intentos restantes: {restantes}")
     st.stop()
 
 usuario = st.session_state.usuario
@@ -624,6 +677,23 @@ else:
                 db.actualizar_perfil(usuario, nuevo_peso, altura, edad, nueva_kcal, nueva_prot, nuevos_carbs, nuevas_grasas)
                 st.success("Perfil actualizado.")
                 st.rerun()
+
+        _, pregunta_actual_usr = db.obtener_pregunta_seguridad(usuario)
+        with st.expander("🛡️ Pregunta de Seguridad (Recuperación de Contraseña)", expanded=not bool(pregunta_actual_usr)):
+            if not pregunta_actual_usr:
+                st.warning("⚠️ Aún no has configurado tu pregunta de seguridad. Configúrala aquí para poder recuperar tu contraseña si la olvidas.")
+            else:
+                st.caption(f"Pregunta actual configurada: **{pregunta_actual_usr}**")
+            idx_preg = PREGUNTAS_SEGURIDAD.index(pregunta_actual_usr) if pregunta_actual_usr in PREGUNTAS_SEGURIDAD else 0
+            nueva_preg_usr = st.selectbox("Pregunta de seguridad", PREGUNTAS_SEGURIDAD, index=idx_preg, key=f"preg_perfil_{usuario}")
+            nueva_resp_usr = st.text_input("Respuesta secreta", type="password", max_chars=100, key=f"resp_perfil_{usuario}").strip()
+            if st.button("Guardar Pregunta de Seguridad", use_container_width=True, key=f"btn_preg_{usuario}"):
+                if not nueva_resp_usr:
+                    st.warning("Escribe una respuesta para tu pregunta de seguridad.")
+                else:
+                    db.guardar_pregunta_seguridad(usuario, nueva_preg_usr, nueva_resp_usr)
+                    st.success("✅ Pregunta y respuesta de seguridad guardadas (encriptadas).")
+                    st.rerun()
 
         with st.expander("🔐 Seguridad: Cambiar Contraseña", expanded=False):
             pwd_actual = st.text_input("Contraseña actual", type="password", key=f"pwd_act_{usuario}")

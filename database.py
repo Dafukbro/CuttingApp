@@ -76,7 +76,7 @@ def _ph(es_pg, cantidad=1):
 
 
 @st.cache_resource
-def init_db(_version=5):
+def init_db(_version=7):
     conn, es_pg = _conectar()
     try:
         c = conn.cursor()
@@ -86,7 +86,9 @@ def init_db(_version=5):
             """
             CREATE TABLE IF NOT EXISTS usuarios (
                 usuario TEXT PRIMARY KEY,
-                password TEXT
+                password TEXT,
+                pregunta_seguridad TEXT,
+                respuesta_hash TEXT
             )
             """,
             """
@@ -148,6 +150,17 @@ def init_db(_version=5):
             except Exception:
                 conn.rollback()
 
+        # Asegurar que las columnas de pregunta de seguridad existan en cuentas creadas antes
+        for col_sql in [
+            "ALTER TABLE usuarios ADD COLUMN pregunta_seguridad TEXT;",
+            "ALTER TABLE usuarios ADD COLUMN respuesta_hash TEXT;"
+        ]:
+            try:
+                c.execute(col_sql)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+
         # En Supabase (PostgreSQL), activar Row Level Security (RLS) en todas las tablas
         # para bloquear el acceso público desde la API REST (PostgREST) y eliminar las alertas de vulnerabilidad.
         if es_pg:
@@ -167,15 +180,20 @@ def init_db(_version=5):
 
 
 # --- FUNCIONES DE AUTENTICACIÓN Y SEGURIDAD ---
-def crear_usuario(usuario, password):
-    """Crea un usuario con contraseña protegida con PBKDF2-HMAC-SHA256 + salt."""
+def crear_usuario(usuario, password, pregunta="", respuesta=""):
+    """Crea un usuario con contraseña y respuesta de seguridad protegidas con PBKDF2-HMAC-SHA256 + salt."""
     conn, es_pg = _conectar()
     try:
         c = conn.cursor()
-        p = _ph(es_pg, 2)
+        p = _ph(es_pg, 4)
         pwd_hash = _hash_password(password)
+        resp_limpia = str(respuesta or "").strip().lower()
+        resp_hash = _hash_password(resp_limpia) if resp_limpia else ""
         try:
-            c.execute(f"INSERT INTO usuarios (usuario, password) VALUES ({p})", (usuario, pwd_hash))
+            c.execute(
+                f"INSERT INTO usuarios (usuario, password, pregunta_seguridad, respuesta_hash) VALUES ({p})",
+                (usuario, pwd_hash, str(pregunta or "").strip(), resp_hash)
+            )
             conn.commit()
             return True
         except Exception:
@@ -216,6 +234,66 @@ def cambiar_password(usuario, password_actual, password_nueva):
     try:
         c = conn.cursor()
         s = "%s" if es_pg else "?"
+        nuevo_hash = _hash_password(password_nueva)
+        c.execute(f"UPDATE usuarios SET password = {s} WHERE usuario = {s}", (nuevo_hash, usuario))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def obtener_pregunta_seguridad(usuario):
+    """
+    Retorna (existe_usuario: bool, pregunta: str).
+    Si el usuario existe pero aún no configuró pregunta, pregunta será "".
+    """
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        c.execute(f"SELECT pregunta_seguridad FROM usuarios WHERE usuario = {s}", (usuario,))
+        fila = c.fetchone()
+        if fila is None:
+            return False, ""
+        return True, str(fila[0] or "").strip()
+    finally:
+        conn.close()
+
+
+def guardar_pregunta_seguridad(usuario, pregunta, respuesta):
+    """Guarda o actualiza la pregunta y respuesta de seguridad encriptada del usuario."""
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        resp_limpia = str(respuesta).strip().lower()
+        resp_hash = _hash_password(resp_limpia)
+        c.execute(
+            f"UPDATE usuarios SET pregunta_seguridad = {s}, respuesta_hash = {s} WHERE usuario = {s}",
+            (str(pregunta).strip(), resp_hash, usuario)
+        )
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def recuperar_password_pregunta(usuario, respuesta_ingresada, password_nueva):
+    """Verifica la respuesta de seguridad y restablece la contraseña."""
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        c.execute(f"SELECT respuesta_hash FROM usuarios WHERE usuario = {s}", (usuario,))
+        fila = c.fetchone()
+        if not fila or not fila[0]:
+            return False
+
+        resp_limpia = str(respuesta_ingresada).strip().lower()
+        es_valida, _ = _verificar_hash(resp_limpia, fila[0])
+        if not es_valida:
+            return False
+
         nuevo_hash = _hash_password(password_nueva)
         c.execute(f"UPDATE usuarios SET password = {s} WHERE usuario = {s}", (nuevo_hash, usuario))
         conn.commit()
