@@ -1,12 +1,11 @@
 from datetime import datetime, timezone, timedelta
-from email.message import EmailMessage
 import importlib
 import re
-import smtplib
 import time
 import streamlit as st
 import database as db
 import ai_helper as ai
+import email_helper as eh
 
 if not hasattr(db, "verificar_codigo_y_restablecer"):
     importlib.reload(db)
@@ -54,44 +53,6 @@ def calcular_macros_objetivo(peso_kg, altura_val, edad_val, objetivo_key, activi
     meta_grasas = int(peso_f * cfg["grasas_kg"])
     meta_carbs = max(int((meta_kcal - (meta_prot * 4) - (meta_grasas * 9)) / 4), 50)
     return meta_kcal, meta_prot, meta_carbs, meta_grasas, round(altura_cm, 1)
-
-def ocultar_email(email_str):
-    """Oculta parcialmente el correo (ej. al***@gmail.com) para proteger la privacidad."""
-    if not email_str or "@" not in email_str:
-        return ""
-    local, dominio = email_str.split("@", 1)
-    prefijo = local[:2] if len(local) >= 2 else local[:1]
-    return f"{prefijo}***@{dominio}"
-
-
-def enviar_codigo_email(destinatario, usuario_nombre, codigo):
-    """Envía el código de recuperación de 6 dígitos por correo usando SMTP_EMAIL y SMTP_PASSWORD en st.secrets."""
-    if "SMTP_EMAIL" not in st.secrets or "SMTP_PASSWORD" not in st.secrets:
-        return False, "Falta configurar SMTP_EMAIL y SMTP_PASSWORD en los Secrets de Streamlit."
-
-    remitente = str(st.secrets["SMTP_EMAIL"]).strip()
-    pwd_smtp = str(st.secrets["SMTP_PASSWORD"]).strip().replace(" ", "")
-
-    msg = EmailMessage()
-    msg["Subject"] = f"🔥 Tu código de recuperación ({codigo}) - Cutting Tracker"
-    msg["From"] = f"Cutting Tracker <{remitente}>"
-    msg["To"] = destinatario
-    msg.set_content(
-        f"Hola {usuario_nombre},\n\n"
-        f"Tu código de verificación para restablecer tu contraseña en Cutting Tracker es:\n\n"
-        f"    {codigo}\n\n"
-        f"Este código es válido por 10 minutos.\n"
-        f"Si no solicitaste este cambio, puedes ignorar este mensaje."
-    )
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=10) as smtp:
-            smtp.login(remitente, pwd_smtp)
-            smtp.send_message(msg)
-        return True, "Código enviado con éxito."
-    except Exception as e:
-        return False, f"No se pudo enviar el correo: {e}"
-
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
 db.init_db(6)
@@ -176,10 +137,12 @@ if not st.session_state.usuario:
                     else:
                         with st.spinner("Enviando código a tu correo..."):
                             codigo_6 = db.generar_codigo_recuperacion(user_rec)
-                            enviado, msg_envio = enviar_codigo_email(email_guardado, user_rec, codigo_6)
+                            smtp_usr = st.secrets.get("SMTP_EMAIL", "")
+                            smtp_pwd = st.secrets.get("SMTP_PASSWORD", "")
+                            enviado, msg_envio = eh.enviar_codigo_email(email_guardado, user_rec, codigo_6, smtp_usr, smtp_pwd)
                             if enviado:
                                 st.session_state.usuario_recuperacion = user_rec
-                                st.success(f"✅ Enviamos un código de 6 dígitos a **{ocultar_email(email_guardado)}** (válido por 10 minutos).")
+                                st.success(f"✅ Enviamos un código de 6 dígitos a **{eh.ocultar_email(email_guardado)}** (válido por 10 minutos).")
                             else:
                                 st.error(msg_envio)
 
