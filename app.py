@@ -21,6 +21,38 @@ def fecha_hoy():
 def ahora_local():
     return datetime.now(ZONA_HORARIA)
 
+OBJETIVOS_CONFIG = {
+    "🔥 Definición moderada (-400 kcal)": {"ajuste_kcal": -400, "prot_kg": 2.2, "grasas_kg": 0.9},
+    "⚡ Definición agresiva (-600 kcal)": {"ajuste_kcal": -600, "prot_kg": 2.3, "grasas_kg": 0.85},
+    "⚖️ Mantenimiento / Recomposición (0 kcal)": {"ajuste_kcal": 0, "prot_kg": 2.0, "grasas_kg": 1.0},
+    "💪 Volumen limpio / Hipertrofia (+300 kcal)": {"ajuste_kcal": 300, "prot_kg": 1.9, "grasas_kg": 1.0},
+    "🚀 Volumen clásico (+500 kcal)": {"ajuste_kcal": 500, "prot_kg": 1.8, "grasas_kg": 1.0},
+}
+
+NIVELES_ACTIVIDAD = {
+    "🛋️ Sedentario (Poco o nada de ejercicio)": 1.2,
+    "🚶 Ligero (1 a 3 días de entreno/semana)": 1.375,
+    "🏋️ Moderado (3 a 5 días de entreno/semana)": 1.55,
+    "🔥 Intenso (6 a 7 días de entreno/semana)": 1.725,
+}
+
+def calcular_macros_objetivo(peso_kg, altura_val, edad_val, objetivo_key, actividad_key):
+    """Calcula calorías y macronutrientes ideales según Mifflin-St Jeor, objetivo y actividad."""
+    altura_cm = float(altura_val) * 100.0 if float(altura_val) < 3.0 else float(altura_val)
+    peso_f = float(peso_kg)
+    edad_i = int(edad_val)
+
+    tmb = (10.0 * peso_f) + (6.25 * altura_cm) - (5.0 * edad_i) + 5.0
+    factor_act = NIVELES_ACTIVIDAD.get(actividad_key, 1.55)
+    mantenimiento = int(tmb * factor_act)
+
+    cfg = OBJETIVOS_CONFIG.get(objetivo_key, OBJETIVOS_CONFIG["🔥 Definición moderada (-400 kcal)"])
+    meta_kcal = max(mantenimiento + cfg["ajuste_kcal"], 1200)
+    meta_prot = int(peso_f * cfg["prot_kg"])
+    meta_grasas = int(peso_f * cfg["grasas_kg"])
+    meta_carbs = max(int((meta_kcal - (meta_prot * 4) - (meta_grasas * 9)) / 4), 50)
+    return meta_kcal, meta_prot, meta_carbs, meta_grasas, round(altura_cm, 1)
+
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
 db.init_db(5)
 
@@ -90,28 +122,26 @@ datos_perfil = db.obtener_perfil(usuario)
 
 if not datos_perfil:
     st.title(f"👋 Bienvenido, {usuario}")
-    st.write("Cuéntame sobre ti para configurar tus metas automáticamente.")
+    st.write("Cuéntame sobre ti y elige tu objetivo para configurar tus metas automáticamente.")
     descripcion_usuario = st.text_area(
         "¿Cuál es tu peso, altura y edad?",
         placeholder="Ej. Tengo 21 años, mido 1.75m y peso 75 kilos.",
         key=f"desc_inicial_{usuario}"
     )
+    obj_inicial = st.selectbox("🎯 ¿Cuál es tu objetivo actual?", list(OBJETIVOS_CONFIG.keys()), key=f"obj_ini_{usuario}")
+    act_inicial = st.selectbox("🏃 Nivel de actividad semanal", list(NIVELES_ACTIVIDAD.keys()), index=2, key=f"act_ini_{usuario}")
     
-    if st.button("✨ Generar mi plan", use_container_width=True):
+    if st.button("✨ Generar mi plan", type="primary", use_container_width=True):
         if descripcion_usuario:
             with st.spinner("Calculando macros ideales..."):
                 try:
                     datos = ai.extraer_datos_perfil(descripcion_usuario, API_KEY)
                     p_val, a_val, e_val = float(datos["peso"]), float(datos["altura"]), int(datos["edad"])
+                    meta_kcal, meta_prot, meta_carbs, meta_grasas, a_cm = calcular_macros_objetivo(
+                        p_val, a_val, e_val, obj_inicial, act_inicial
+                    )
                     
-                    tmb = (10 * p_val) + (6.25 * a_val) - (5 * e_val) + 5
-                    mantenimiento = int(tmb * 1.55)
-                    meta_kcal = mantenimiento - 400
-                    meta_prot = int(p_val * 2.2)
-                    meta_grasas = int(p_val * 0.9)
-                    meta_carbs = int((meta_kcal - (meta_prot * 4) - (meta_grasas * 9)) / 4)
-                    
-                    db.crear_perfil(usuario, p_val, a_val, e_val, meta_kcal, meta_prot, meta_carbs, meta_grasas)
+                    db.crear_perfil(usuario, p_val, a_cm, e_val, meta_kcal, meta_prot, meta_carbs, meta_grasas)
                     db.registrar_peso_diario(usuario, fecha_hoy(), p_val)
                     st.success("¡Perfil creado!")
                     st.rerun()
@@ -549,22 +579,46 @@ else:
                     except Exception as e:
                         st.error(f"Error: {e}")
 
-    # --- PESTAÑA 4: PERFIL (Flexibilidad y eficiencia) ---
+    # --- PESTAÑA 5: PERFIL (Selector de Objetivo y Recálculo Automático + Ajuste Manual) ---
     with tab_perfil:
-        st.subheader(f"Configuración Física de {usuario}")
-        nuevo_peso = st.number_input("Peso actual (kg)", value=float(peso), key=f"perfil_peso_{usuario}")
-        nueva_kcal = st.number_input("Kcal Objetivo", value=int(meta_kcal), step=50, key=f"perfil_kcal_{usuario}")
-        nueva_prot = st.number_input("Proteína (g)", value=int(meta_prot), key=f"perfil_prot_{usuario}")
-        nuevos_carbs = st.number_input("Carbohidratos (g)", value=int(meta_carbs), key=f"perfil_carbs_{usuario}")
-        nuevas_grasas = st.number_input("Grasas (g)", value=int(meta_grasas), key=f"perfil_grasas_{usuario}")
-        
-        if st.button("Guardar Cambios", use_container_width=True, key=f"btn_perfil_{usuario}"):
-            db.actualizar_perfil(usuario, nuevo_peso, altura, edad, nueva_kcal, nueva_prot, nuevos_carbs, nuevas_grasas)
-            st.success("Perfil actualizado.")
-            st.rerun()
+        st.subheader(f"⚙️ Configuración de {usuario}")
 
-        st.divider()
-        with st.expander("🔐 Seguridad: Cambiar Contraseña"):
+        with st.expander("🎯 Cambiar Objetivo y Recalcular Macros Automáticamente", expanded=True):
+            st.caption("Actualiza tus datos o tu etapa física (Definición, Mantenimiento o Volumen) para recalcular tus metas ideales.")
+            col_pf1, col_pf2, col_pf3 = st.columns(3)
+            altura_cm_def = float(altura) * 100.0 if float(altura) < 3.0 else float(altura)
+            peso_calc = col_pf1.number_input("Peso (kg)", min_value=30.0, max_value=250.0, value=float(peso), step=0.5, key=f"calc_peso_{usuario}")
+            altura_calc = col_pf2.number_input("Altura (cm)", min_value=100.0, max_value=230.0, value=float(altura_cm_def), step=1.0, key=f"calc_alt_{usuario}")
+            edad_calc = col_pf3.number_input("Edad (años)", min_value=12, max_value=100, value=int(edad), step=1, key=f"calc_edad_{usuario}")
+
+            obj_sel = st.selectbox("🎯 Objetivo físico", list(OBJETIVOS_CONFIG.keys()), key=f"calc_obj_{usuario}")
+            act_sel = st.selectbox("🏃 Nivel de actividad semanal", list(NIVELES_ACTIVIDAD.keys()), index=2, key=f"calc_act_{usuario}")
+
+            k_sug, p_sug, c_sug, g_sug, a_cm_final = calcular_macros_objetivo(peso_calc, altura_calc, edad_calc, obj_sel, act_sel)
+            st.info(
+                f"📊 **Nuevas metas sugeridas:** 🔥 **{k_sug} kcal** ｜ "
+                f"🥩 **{p_sug}g** Proteína ｜ 🍚 **{c_sug}g** Carbs ｜ 🥑 **{g_sug}g** Grasas"
+            )
+
+            if st.button("✨ Aplicar nuevas metas recomendadas", type="primary", use_container_width=True, key=f"btn_recalc_{usuario}"):
+                db.actualizar_perfil(usuario, peso_calc, a_cm_final, int(edad_calc), k_sug, p_sug, c_sug, g_sug)
+                st.success("¡Objetivo y macros actualizados automáticamente!")
+                st.rerun()
+
+        with st.expander("🎛️ Ajuste Manual de Macros", expanded=False):
+            st.caption("Si prefieres fijar tus calorías y gramos de cada macronutriente manualmente:")
+            nuevo_peso = st.number_input("Peso actual (kg)", value=float(peso), key=f"perfil_peso_{usuario}")
+            nueva_kcal = st.number_input("Kcal Objetivo", value=int(meta_kcal), step=50, key=f"perfil_kcal_{usuario}")
+            nueva_prot = st.number_input("Proteína (g)", value=int(meta_prot), key=f"perfil_prot_{usuario}")
+            nuevos_carbs = st.number_input("Carbohidratos (g)", value=int(meta_carbs), key=f"perfil_carbs_{usuario}")
+            nuevas_grasas = st.number_input("Grasas (g)", value=int(meta_grasas), key=f"perfil_grasas_{usuario}")
+            
+            if st.button("Guardar Ajuste Manual", use_container_width=True, key=f"btn_perfil_{usuario}"):
+                db.actualizar_perfil(usuario, nuevo_peso, altura, edad, nueva_kcal, nueva_prot, nuevos_carbs, nuevas_grasas)
+                st.success("Perfil actualizado.")
+                st.rerun()
+
+        with st.expander("🔐 Seguridad: Cambiar Contraseña", expanded=False):
             pwd_actual = st.text_input("Contraseña actual", type="password", key=f"pwd_act_{usuario}")
             pwd_nueva = st.text_input("Nueva contraseña (mínimo 6 caracteres)", type="password", key=f"pwd_new_{usuario}")
             pwd_conf = st.text_input("Confirmar nueva contraseña", type="password", key=f"pwd_conf_{usuario}")
