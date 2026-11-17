@@ -56,9 +56,29 @@ def calcular_macros_objetivo(peso_kg, altura_val, edad_val, objetivo_key, activi
 PREGUNTAS_SEGURIDAD = [
     "¿Cuál era el nombre de tu primera mascota?",
     "¿En qué ciudad o barrio creciste?",
-    "¿Cuál es tu comida favorita?",
     "¿Cuál era el apodo de tu infancia?",
-    "¿Cuál es tu videojuego, serie o película favorita?",
+    "¿Cuál fue el nombre de tu primera escuela o colegio?",
+    "¿Cuál era el nombre de tu mejor amigo/a de la infancia?",
+    "¿Cuál es el segundo nombre de tu madre?",
+    "¿Cuál es el segundo nombre de tu padre?",
+    "¿En qué ciudad se conocieron tus padres?",
+    "¿Cuál fue tu primer videojuego favorito?",
+    "¿Cuál es tu película o serie favorita de todos los tiempos?",
+    "¿Cuál es tu personaje ficticio o de anime favorito?",
+    "¿Cuál es tu comida trampa (cheat meal) favorita?",
+    "¿Cuál es tu postre favorito?",
+    "¿Cuál fue el primer concierto o evento al que asististe?",
+    "¿Cuál es la marca o modelo de tu primer auto o moto?",
+    "¿Cuál es el nombre de tu profesor/a favorito/a del colegio?",
+    "¿A qué lugar o país hiciste tu viaje más memorable?",
+    "¿Cuál es tu equipo deportivo o atleta favorito?",
+    "¿Cuál es tu ejercicio favorito en el gimnasio?",
+    "¿Cuál es tu canción o banda musical favorita?",
+    "¿Cómo se llamaba la calle donde vivías de niño/a?",
+    "¿Cuál fue tu primer trabajo?",
+    "¿En qué hospital o clínica naciste?",
+    "¿Cuál es el nombre de tu abuelo/a materno/a?",
+    "✍️ Escribir mi propia pregunta personalizada..."
 ]
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
@@ -111,12 +131,16 @@ if not st.session_state.usuario:
         pass_reg_conf = st.text_input("Confirmar Contraseña", type="password", max_chars=128, key="reg_pass_conf")
         st.divider()
         st.caption("🛡️ **Pregunta de Seguridad** (te permitirá recuperar tu cuenta si olvidas la contraseña):")
-        preg_reg = st.selectbox("Elige una pregunta de seguridad", PREGUNTAS_SEGURIDAD, key="reg_preg")
+        preg_sel_reg = st.selectbox("Elige una pregunta de seguridad", PREGUNTAS_SEGURIDAD, key="reg_preg")
+        if preg_sel_reg == "✍️ Escribir mi propia pregunta personalizada...":
+            preg_reg = st.text_input("Escribe tu pregunta personalizada", max_chars=120, placeholder="Ej. ¿Cuál fue mi primer gimnasio?", key="reg_preg_custom").strip()
+        else:
+            preg_reg = preg_sel_reg
         resp_reg = st.text_input("Tu respuesta secreta", max_chars=100, key="reg_resp").strip()
 
         if st.button("Crear Cuenta", type="primary", use_container_width=True):
-            if not user_reg or not pass_reg or not pass_reg_conf or not resp_reg:
-                st.warning("Completa todos los campos (incluyendo la respuesta de seguridad).")
+            if not user_reg or not pass_reg or not pass_reg_conf or not preg_reg or not resp_reg:
+                st.warning("Completa todos los campos (incluyendo la pregunta y respuesta de seguridad).")
             elif not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", user_reg):
                 st.error("El usuario debe tener entre 3 y 30 caracteres (solo letras, números, puntos, guiones o guion bajo, sin espacios).")
             elif len(pass_reg) < 6:
@@ -685,11 +709,15 @@ else:
             else:
                 st.caption(f"Pregunta actual configurada: **{pregunta_actual_usr}**")
             idx_preg = PREGUNTAS_SEGURIDAD.index(pregunta_actual_usr) if pregunta_actual_usr in PREGUNTAS_SEGURIDAD else 0
-            nueva_preg_usr = st.selectbox("Pregunta de seguridad", PREGUNTAS_SEGURIDAD, index=idx_preg, key=f"preg_perfil_{usuario}")
+            preg_sel_usr = st.selectbox("Pregunta de seguridad", PREGUNTAS_SEGURIDAD, index=idx_preg, key=f"preg_perfil_{usuario}")
+            if preg_sel_usr == "✍️ Escribir mi propia pregunta personalizada...":
+                nueva_preg_usr = st.text_input("Escribe tu pregunta personalizada", max_chars=120, key=f"preg_custom_{usuario}").strip()
+            else:
+                nueva_preg_usr = preg_sel_usr
             nueva_resp_usr = st.text_input("Respuesta secreta", type="password", max_chars=100, key=f"resp_perfil_{usuario}").strip()
             if st.button("Guardar Pregunta de Seguridad", use_container_width=True, key=f"btn_preg_{usuario}"):
-                if not nueva_resp_usr:
-                    st.warning("Escribe una respuesta para tu pregunta de seguridad.")
+                if not nueva_preg_usr or not nueva_resp_usr:
+                    st.warning("Completa la pregunta y escribe una respuesta secreta.")
                 else:
                     db.guardar_pregunta_seguridad(usuario, nueva_preg_usr, nueva_resp_usr)
                     st.success("✅ Pregunta y respuesta de seguridad guardadas (encriptadas).")
