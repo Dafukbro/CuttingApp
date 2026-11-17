@@ -26,13 +26,24 @@ CONFIG_ESTANDAR = types.GenerateContentConfig(
     temperature=0.2,
 )
 
+CONFIG_CHAT_HYDROGEN = types.GenerateContentConfig(
+    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
+    temperature=0.75,
+)
+
+CONFIG_CHAT_ESTANDAR = types.GenerateContentConfig(
+    temperature=0.75,
+)
+
 
 def _cliente(api_key):
     """Crea cliente con 1 intento por modelo para saltar de inmediato al siguiente si hay error 429 o 503."""
     return genai.Client(api_key=api_key, http_options={"retry_options": {"attempts": 1}})
 
 
-def _config_para_modelo(modelo):
+def _config_para_modelo(modelo, es_chat=False):
+    if es_chat:
+        return CONFIG_CHAT_HYDROGEN if "hydrogen" in modelo else CONFIG_CHAT_ESTANDAR
     return CONFIG_HYDROGEN if "hydrogen" in modelo else CONFIG_ESTANDAR
 
 
@@ -90,15 +101,19 @@ def consultar_asistente_stream(pregunta, contexto_macros, api_key, historial_cha
         texto_historial = "\n".join(lineas)
 
     prompt_completo = f"""
-    Eres un entrenador y nutricionista deportivo experto en composición corporal: definición (cutting), mantenimiento/recomposición, volumen limpio (bulking) y ayuno intermitente.
-    - Adapta tus recomendaciones a la etapa actual del usuario, sus comidas registradas, ejercicio del día, macros restantes y estado de ayuno.
-    - Sé directo, conciso, práctico y amigable (usa viñetas breves si sugieres alimentos con gramos y macros).
-    - Mantén el hilo de la conversación sin volver a saludar si ya hay mensajes previos.
+    Eres el coach y compa de confianza del usuario en nutrición deportiva, gimnasio y estilo de vida fitness (definición/cutting, mantenimiento o volumen/hipertrofia, además de ayuno intermitente).
+
+    Tu personalidad y estilo:
+    - Tienes muchísimo carisma, buena vibra y hablas de forma cercana, natural y motivadora (como un entrenador personal joven y apasionado que celebra tus avances y te impulsa sin juzgarte).
+    - Nada de sonar como un robot o una enciclopedia médica: usa un tono conversacional, fresco, con chispa y emojis bien puestos (🔥, 💪, 🥩, 🙌).
+    - Ve al grano con consejos súper prácticos y realistas: si sugiere comidas, da ideas ricas y fáciles de preparar con sus gramos y macros aproximados para cuadrar lo que le falta hoy.
+    - Toma muy en cuenta lo que ya comió hoy, si entrenó, sus macros restantes y si está en ayuno.
+    - Mantén el hilo de la charla como una conversación real entre amigos (no vuelvas a decir "¡Hola!" en cada mensaje si ya venían hablando en el historial).
 
     DATOS ACTUALES DEL USUARIO HOY:
     {contexto_macros}
 
-    HISTORIAL DE ESTA SESIÓN:
+    HISTORIAL DE LA CONVERSACIÓN EN ESTA SESIÓN:
     {texto_historial}
 
     Usuario: {pregunta}
@@ -109,7 +124,7 @@ def consultar_asistente_stream(pregunta, contexto_macros, api_key, historial_cha
             respuesta = client.models.generate_content_stream(
                 model=modelo,
                 contents=prompt_completo,
-                config=_config_para_modelo(modelo)
+                config=_config_para_modelo(modelo, es_chat=True)
             )
             for fragmento in respuesta:
                 if fragmento.text:
