@@ -7,7 +7,7 @@ import database as db
 import ai_helper as ai
 import email_helper as eh
 
-if not hasattr(db, "verificar_codigo_y_restablecer"):
+if not hasattr(db, "existe_usuario"):
     importlib.reload(db)
 if not hasattr(ai, "calcular_gasto_ejercicio"):
     importlib.reload(ai)
@@ -102,47 +102,50 @@ if not st.session_state.usuario:
 
     with tab_registro:
         user_reg = st.text_input("Nuevo Usuario (letras, números o guion bajo)", max_chars=30, key="reg_user").strip()
-        email_reg = st.text_input("Correo electrónico (para recuperar tu contraseña)", max_chars=100, placeholder="ejemplo@gmail.com", key="reg_email").strip().lower()
         pass_reg = st.text_input("Nueva Contraseña (mínimo 6 caracteres)", type="password", max_chars=128, key="reg_pass")
         pass_reg_conf = st.text_input("Confirmar Contraseña", type="password", max_chars=128, key="reg_pass_conf")
         if st.button("Crear Cuenta", use_container_width=True):
-            if not user_reg or not email_reg or not pass_reg or not pass_reg_conf:
+            if not user_reg or not pass_reg or not pass_reg_conf:
                 st.warning("Completa todos los campos.")
             elif not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", user_reg):
                 st.error("El usuario debe tener entre 3 y 30 caracteres (solo letras, números, puntos, guiones o guion bajo, sin espacios).")
-            elif not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_reg):
-                st.error("Ingresa un correo electrónico válido.")
             elif len(pass_reg) < 6:
                 st.error("La contraseña debe tener al menos 6 caracteres.")
             elif pass_reg != pass_reg_conf:
                 st.error("Las contraseñas no coinciden.")
             else:
-                if db.crear_usuario(user_reg, pass_reg, email_reg):
+                if db.crear_usuario(user_reg, pass_reg):
                     st.success("¡Cuenta creada con éxito! Ahora puedes iniciar sesión.")
                 else:
                     st.error("Ese nombre de usuario ya existe.")
 
     with tab_recuperar:
-        st.caption("Recibe un código de verificación de 6 dígitos en tu correo registrado para crear una contraseña nueva.")
+        st.caption("Ingresa tu usuario y tu correo electrónico para recibir un código de verificación de 6 dígitos.")
         with st.container(border=True):
             st.markdown("##### 1️⃣ Solicitar código de verificación")
-            user_rec = st.text_input("Ingresa tu nombre de usuario", value=st.session_state.usuario_recuperacion, max_chars=30, key="rec_user_input").strip()
-            if st.button("📩 Enviar código de 6 dígitos a mi correo", use_container_width=True, key="btn_enviar_cod"):
-                if not user_rec:
-                    st.warning("Escribe tu nombre de usuario.")
+            user_rec = st.text_input("Nombre de usuario", value=st.session_state.usuario_recuperacion, max_chars=30, key="rec_user_input").strip()
+            email_rec = st.text_input("Correo electrónico donde recibirás el código", max_chars=100, placeholder="tucorreo@gmail.com", key="rec_email_input").strip().lower()
+            if st.button("📩 Enviar código de 6 dígitos", use_container_width=True, key="btn_enviar_cod"):
+                if not user_rec or not email_rec:
+                    st.warning("Escribe tu nombre de usuario y tu correo electrónico.")
+                elif not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_rec):
+                    st.error("Ingresa un correo electrónico válido.")
+                elif not db.existe_usuario(user_rec):
+                    st.error("No existe ninguna cuenta con ese nombre de usuario.")
                 else:
                     email_guardado = db.obtener_email_usuario(user_rec)
-                    if not email_guardado:
-                        st.error("Este usuario no existe o aún no tiene un correo de recuperación vinculado.")
+                    if email_guardado and email_guardado.lower() != email_rec:
+                        st.error("El correo ingresado no coincide con el correo vinculado a este usuario.")
                     else:
                         with st.spinner("Enviando código a tu correo..."):
                             codigo_6 = db.generar_codigo_recuperacion(user_rec)
                             smtp_usr = st.secrets.get("SMTP_EMAIL", "")
                             smtp_pwd = st.secrets.get("SMTP_PASSWORD", "")
-                            enviado, msg_envio = eh.enviar_codigo_email(email_guardado, user_rec, codigo_6, smtp_usr, smtp_pwd)
+                            enviado, msg_envio = eh.enviar_codigo_email(email_rec, user_rec, codigo_6, smtp_usr, smtp_pwd)
                             if enviado:
                                 st.session_state.usuario_recuperacion = user_rec
-                                st.success(f"✅ Enviamos un código de 6 dígitos a **{eh.ocultar_email(email_guardado)}** (válido por 10 minutos).")
+                                st.session_state.email_recuperacion = email_rec
+                                st.success(f"✅ Enviamos un código de 6 dígitos a **{email_rec}** (válido por 10 minutos).")
                             else:
                                 st.error(msg_envio)
 
@@ -153,6 +156,7 @@ if not st.session_state.usuario:
             conf_pwd_rec = st.text_input("Confirmar Nueva Contraseña", type="password", max_chars=128, key="rec_conf_pwd")
             if st.button("✅ Restablecer Contraseña", type="primary", use_container_width=True, key="btn_reset_pwd"):
                 usuario_objetivo = user_rec or st.session_state.usuario_recuperacion
+                email_objetivo = email_rec or st.session_state.get("email_recuperacion", "")
                 if not usuario_objetivo or not cod_input or not nueva_pwd_rec or not conf_pwd_rec:
                     st.warning("Completa tu usuario, el código de 6 dígitos y la nueva contraseña.")
                 elif len(nueva_pwd_rec) < 6:
@@ -162,7 +166,10 @@ if not st.session_state.usuario:
                 else:
                     exito_rec, msg_rec = db.verificar_codigo_y_restablecer(usuario_objetivo, cod_input, nueva_pwd_rec)
                     if exito_rec:
+                        if email_objetivo:
+                            db.actualizar_email_usuario(usuario_objetivo, email_objetivo)
                         st.session_state.usuario_recuperacion = ""
+                        st.session_state.email_recuperacion = ""
                         st.success(msg_rec)
                     else:
                         st.error(msg_rec)
@@ -675,26 +682,6 @@ else:
                 db.actualizar_perfil(usuario, nuevo_peso, altura, edad, nueva_kcal, nueva_prot, nuevos_carbs, nuevas_grasas)
                 st.success("Perfil actualizado.")
                 st.rerun()
-
-        email_actual_usr = db.obtener_email_usuario(usuario)
-        with st.expander("📧 Correo de Recuperación de Cuenta", expanded=not bool(email_actual_usr)):
-            if not email_actual_usr:
-                st.warning("⚠️ Aún no has vinculado un correo electrónico. Agrégalo para poder recuperar tu contraseña si la olvidas.")
-            else:
-                st.caption(f"Correo vinculado actualmente: **{email_actual_usr}**")
-            nuevo_email_usr = st.text_input(
-                "Correo electrónico",
-                value=email_actual_usr,
-                placeholder="tucorreo@gmail.com",
-                key=f"email_perfil_{usuario}"
-            ).strip().lower()
-            if st.button("Guardar Correo de Recuperación", use_container_width=True, key=f"btn_email_{usuario}"):
-                if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", nuevo_email_usr):
-                    st.error("Ingresa un correo electrónico válido.")
-                else:
-                    db.actualizar_email_usuario(usuario, nuevo_email_usr)
-                    st.success("✅ Correo de recuperación guardado correctamente.")
-                    st.rerun()
 
         with st.expander("🔐 Seguridad: Cambiar Contraseña", expanded=False):
             pwd_actual = st.text_input("Contraseña actual", type="password", key=f"pwd_act_{usuario}")

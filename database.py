@@ -260,6 +260,18 @@ def obtener_email_usuario(usuario):
         conn.close()
 
 
+def existe_usuario(usuario):
+    """Verifica si el nombre de usuario existe en la base de datos."""
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        c.execute(f"SELECT usuario FROM usuarios WHERE usuario = {s}", (usuario,))
+        return c.fetchone() is not None
+    finally:
+        conn.close()
+
+
 def actualizar_email_usuario(usuario, email):
     """Actualiza el correo electrónico de recuperación del usuario."""
     conn, es_pg = _conectar()
