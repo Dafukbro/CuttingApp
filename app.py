@@ -8,7 +8,7 @@ import ai_helper as ai
 
 if not hasattr(db, "_sesion_db"):
     importlib.reload(db)
-if not hasattr(ai, "CONFIG_BAJO_RAZONAMIENTO"):
+if not hasattr(ai, "_generar"):
     importlib.reload(ai)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
@@ -65,7 +65,7 @@ def _confirmar_y_redirigir(mensaje):
     st.session_state.reset_id += 1
     st.session_state.ir_a_resumen = True
     st.session_state.mensaje_exito = mensaje
-    time.sleep(1.3)
+    time.sleep(0.9)
     st.rerun()
 
 
@@ -455,30 +455,34 @@ else:
                 if not comida_ia:
                     st.warning("Escribe qué comiste antes de calcular.")
                 else:
+                    datos = None
                     with st.spinner("Analizando comida con IA..."):
                         try:
                             datos = ai.calcular_macros_texto(comida_ia, API_KEY)
-                            db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
-                            _confirmar_y_redirigir(
-                                f"✅ Comida registrada: **{datos['nombre']}** — "
-                                f"🔥 {datos['kcal']} kcal ｜ 🥩 {datos['proteina']}g P ｜ 🍚 {datos['carbs']}g C ｜ 🥑 {datos['grasas']}g G"
-                            )
                         except Exception as e:
                             st.error(f"Error: {e}")
+                    if datos:
+                        db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
+                        _confirmar_y_redirigir(
+                            f"✅ Comida registrada: **{datos['nombre']}** — "
+                            f"🔥 {datos['kcal']} kcal ｜ 🥩 {datos['proteina']}g P ｜ 🍚 {datos['carbs']}g C ｜ 🥑 {datos['grasas']}g G"
+                        )
 
         with st.expander("📸 Escáner Visual (Foto del plato)", expanded=False):
             foto_plato = st.file_uploader("Toma o sube una foto", type=["jpg", "jpeg", "png"], key=f"foto_{usuario}_{rid}")
             if foto_plato and st.button("Analizar foto", type="primary", use_container_width=True, key=f"btn_foto_{usuario}"):
+                datos_img = None
                 with st.spinner("Analizando imagen con IA..."):
                     try:
-                        datos = ai.calcular_macros_imagen(foto_plato, API_KEY)
-                        db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
-                        _confirmar_y_redirigir(
-                            f"✅ Foto registrada: **{datos['nombre']}** — "
-                            f"🔥 {datos['kcal']} kcal ｜ 🥩 {datos['proteina']}g P ｜ 🍚 {datos['carbs']}g C ｜ 🥑 {datos['grasas']}g G"
-                        )
+                        datos_img = ai.calcular_macros_imagen(foto_plato, API_KEY)
                     except Exception as e:
                         st.error(f"Fallo en servidor de IA, intenta más tarde. Detalle: {e}")
+                if datos_img:
+                    db.agregar_comida(usuario, fecha_activa, datos_img["nombre"], datos_img["kcal"], datos_img["proteina"], datos_img["carbs"], datos_img["grasas"])
+                    _confirmar_y_redirigir(
+                        f"✅ Foto registrada: **{datos_img['nombre']}** — "
+                        f"🔥 {datos_img['kcal']} kcal ｜ 🥩 {datos_img['proteina']}g P ｜ 🍚 {datos_img['carbs']}g C ｜ 🥑 {datos_img['grasas']}g G"
+                    )
 
         with st.expander("🏷️ Registro Manual Rápido (Etiqueta Nutricional)", expanded=False):
             st.caption("Ideal cuando ya conoces los valores de un empaque o porción. Si dejas Kcal en 0, se calcularán automáticamente a partir de los macros.")
@@ -505,16 +509,18 @@ else:
                 key=f"ej_txt_{usuario}_{rid}"
             ).strip()
             if st.button("🔥 Calcular y guardar ejercicio", use_container_width=True, key=f"btn_ej_ia_{usuario}") and ej_texto:
+                datos_ej = None
                 with st.spinner("Calculando calorías quemadas según tu peso..."):
                     try:
                         datos_ej = ai.calcular_gasto_ejercicio(ej_texto, peso, API_KEY)
-                        db.agregar_ejercicio(
-                            usuario, fecha_activa,
-                            datos_ej["nombre"], datos_ej["duracion_min"], datos_ej["kcal_quemadas"]
-                        )
-                        _confirmar_y_redirigir(f"🏃 Ejercicio registrado: **{datos_ej['nombre']}** (-{datos_ej['kcal_quemadas']} kcal)")
                     except Exception as e:
                         st.error(f"Error al calcular ejercicio: {e}")
+                if datos_ej:
+                    db.agregar_ejercicio(
+                        usuario, fecha_activa,
+                        datos_ej["nombre"], datos_ej["duracion_min"], datos_ej["kcal_quemadas"]
+                    )
+                    _confirmar_y_redirigir(f"🏃 Ejercicio registrado: **{datos_ej['nombre']}** (-{datos_ej['kcal_quemadas']} kcal)")
 
             st.divider()
             st.markdown("##### ⌚ Registro manual de ejercicio (Smartwatch / Máquina)")
