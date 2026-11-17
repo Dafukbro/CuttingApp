@@ -1,108 +1,28 @@
-from datetime import datetime, timezone, timedelta
 import importlib
-import re
-import time
 import streamlit as st
 import database as db
 import ai_helper as ai
+from config_nutricion import fecha_hoy
+from vistas_auth import mostrar_pantalla_auth, mostrar_onboarding_perfil
+from vistas_tabs import (
+    render_tab_resumen,
+    render_tab_registro,
+    render_tab_ayuno,
+    render_tab_chat,
+    render_tab_perfil,
+)
 
 if not hasattr(db, "_sesion_db"):
     importlib.reload(db)
 if not hasattr(ai, "CONFIG_CHAT_HYDROGEN"):
     importlib.reload(ai)
 
-ZONA_HORARIA = timezone(timedelta(hours=-5))
-MAX_INTENTOS_LOGIN = 5
-SEGUNDOS_BLOQUEO = 60
-
-
-def fecha_hoy():
-    return datetime.now(ZONA_HORARIA).date()
-
-
-def ahora_local():
-    return datetime.now(ZONA_HORARIA)
-
-
-OBJETIVOS_CONFIG = {
-    "🔥 Definición moderada (-400 kcal)": {"ajuste_kcal": -400, "prot_kg": 2.2, "grasas_kg": 0.9},
-    "⚡ Definición agresiva (-600 kcal)": {"ajuste_kcal": -600, "prot_kg": 2.3, "grasas_kg": 0.85},
-    "⚖️ Mantenimiento / Recomposición (0 kcal)": {"ajuste_kcal": 0, "prot_kg": 2.0, "grasas_kg": 1.0},
-    "💪 Volumen limpio / Hipertrofia (+300 kcal)": {"ajuste_kcal": 300, "prot_kg": 1.9, "grasas_kg": 1.0},
-    "🚀 Volumen clásico (+500 kcal)": {"ajuste_kcal": 500, "prot_kg": 1.8, "grasas_kg": 1.0},
-}
-
-NIVELES_ACTIVIDAD = {
-    "🛋️ Sedentario (Poco o nada de ejercicio)": 1.2,
-    "🚶 Ligero (1 a 3 días de entreno/semana)": 1.375,
-    "🏋️ Moderado (3 a 5 días de entreno/semana)": 1.55,
-    "🔥 Intenso (6 a 7 días de entreno/semana)": 1.725,
-}
-
-
-def calcular_macros_objetivo(peso_kg, altura_val, edad_val, objetivo_key, actividad_key):
-    """Calcula calorías y macronutrientes ideales según Mifflin-St Jeor, objetivo y actividad."""
-    altura_cm = float(altura_val) * 100.0 if float(altura_val) < 3.0 else float(altura_val)
-    peso_f = float(peso_kg)
-    edad_i = int(edad_val)
-
-    tmb = (10.0 * peso_f) + (6.25 * altura_cm) - (5.0 * edad_i) + 5.0
-    factor_act = NIVELES_ACTIVIDAD.get(actividad_key, 1.55)
-    mantenimiento = int(tmb * factor_act)
-
-    cfg = OBJETIVOS_CONFIG.get(objetivo_key, OBJETIVOS_CONFIG["🔥 Definición moderada (-400 kcal)"])
-    meta_kcal = max(mantenimiento + cfg["ajuste_kcal"], 1200)
-    meta_prot = int(peso_f * cfg["prot_kg"])
-    meta_grasas = int(peso_f * cfg["grasas_kg"])
-    meta_carbs = max(int((meta_kcal - (meta_prot * 4) - (meta_grasas * 9)) / 4), 50)
-    return meta_kcal, meta_prot, meta_carbs, meta_grasas, round(altura_cm, 1)
-
-
-def _confirmar_y_redirigir(mensaje):
-    """Muestra confirmación visual en pantalla, limpia los campos y redirige a la pestaña de Resumen."""
-    st.toast(mensaje)
-    st.success(f"{mensaje} — Redirigiendo al Resumen...")
-    st.session_state.reset_id += 1
-    st.session_state.ir_a_resumen = True
-    st.session_state.mensaje_exito = mensaje
-    time.sleep(0.9)
-    st.rerun()
-
-
-PREGUNTAS_SEGURIDAD = [
-    "¿Cuál era el nombre de tu primera mascota?",
-    "¿En qué ciudad o barrio creciste?",
-    "¿Cuál era el apodo de tu infancia?",
-    "¿Cuál fue el nombre de tu primera escuela o colegio?",
-    "¿Cuál era el nombre de tu mejor amigo/a de la infancia?",
-    "¿Cuál es el segundo nombre de tu madre?",
-    "¿Cuál es el segundo nombre de tu padre?",
-    "¿En qué ciudad se conocieron tus padres?",
-    "¿Cuál fue tu primer videojuego favorito?",
-    "¿Cuál es tu película o serie favorita de todos los tiempos?",
-    "¿Cuál es tu personaje ficticio o de anime favorito?",
-    "¿Cuál es tu comida trampa (cheat meal) favorita?",
-    "¿Cuál es tu postre favorito?",
-    "¿Cuál fue el primer concierto o evento al que asististe?",
-    "¿Cuál es la marca o modelo de tu primer auto o moto?",
-    "¿Cuál es el nombre de tu profesor/a favorito/a del colegio?",
-    "¿A qué lugar o país hiciste tu viaje más memorable?",
-    "¿Cuál es tu equipo deportivo o atleta favorito?",
-    "¿Cuál es tu ejercicio favorito en el gimnasio?",
-    "¿Cuál es tu canción o banda musical favorita?",
-    "¿Cómo se llamaba la calle donde vivías de niño/a?",
-    "¿Cuál fue tu primer trabajo?",
-    "¿En qué hospital o clínica naciste?",
-    "¿Cuál es el nombre de tu abuelo/a materno/a?",
-    "✍️ Escribir mi propia pregunta personalizada..."
-]
-
 st.set_page_config(page_title="Tracker Fitness & Cutting", page_icon="🔥", layout="centered")
 db.init_db(8)
 
 API_KEY = st.secrets["API_KEY"]
 
-# --- GESTIÓN DE SESIÓN, SEGURIDAD Y PANTALLA DE LOGIN ---
+# --- INICIALIZACIÓN DE ESTADO DE SESIÓN ---
 if "usuario" not in st.session_state:
     st.session_state.usuario = None
 if "intentos_fallidos" not in st.session_state:
@@ -112,741 +32,71 @@ if "bloqueo_hasta" not in st.session_state:
 if "reset_id" not in st.session_state:
     st.session_state.reset_id = 0
 
+# --- 1. PANTALLA DE LOGIN / REGISTRO / RECUPERACIÓN ---
 if not st.session_state.usuario:
-    st.title("🔐 Acceso a tu Tracker")
-    opciones_auth = ["Iniciar Sesión", "Registrarse", "🔑 Recuperar Contraseña"]
-    if "auth_tab_ant" not in st.session_state:
-        st.session_state.auth_tab_ant = opciones_auth[0]
-
-    auth_sel = st.radio(
-        "Navegación de acceso",
-        opciones_auth,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="auth_nav_radio"
-    )
-    if auth_sel != st.session_state.auth_tab_ant:
-        st.session_state.auth_tab_ant = auth_sel
-        st.session_state.reset_id += 1
-
-    rid_auth = st.session_state.reset_id
-    st.divider()
-
-    if auth_sel == "Iniciar Sesión":
-        tiempo_restante_bloqueo = int(st.session_state.bloqueo_hasta - time.time())
-        if tiempo_restante_bloqueo > 0:
-            st.error(f"⏳ Demasiados intentos fallidos. Por seguridad, espera **{tiempo_restante_bloqueo} segundos** antes de volver a intentar.")
-        else:
-            user_login = st.text_input("Usuario", max_chars=30, key=f"login_user_{rid_auth}").strip()
-            pass_login = st.text_input("Contraseña", type="password", max_chars=128, key=f"login_pass_{rid_auth}")
-            if st.button("Entrar", type="primary", use_container_width=True):
-                if user_login and pass_login:
-                    if db.verificar_usuario(user_login, pass_login):
-                        st.session_state.clear()
-                        st.session_state.usuario = user_login
-                        st.session_state.mensajes = []
-                        st.session_state.reset_id = 0
-                        st.rerun()
-                    else:
-                        st.session_state.intentos_fallidos += 1
-                        restantes = MAX_INTENTOS_LOGIN - st.session_state.intentos_fallidos
-                        if restantes <= 0:
-                            st.session_state.bloqueo_hasta = time.time() + SEGUNDOS_BLOQUEO
-                            st.session_state.intentos_fallidos = 0
-                            st.rerun()
-                        else:
-                            st.error(f"Usuario o contraseña incorrectos. Intentos restantes: {restantes}")
-                else:
-                    st.warning("Completa todos los campos.")
-
-    elif auth_sel == "Registrarse":
-        user_reg = st.text_input("Nuevo Usuario (letras, números o guion bajo)", max_chars=30, key=f"reg_user_{rid_auth}").strip()
-        pass_reg = st.text_input("Nueva Contraseña (mínimo 6 caracteres)", type="password", max_chars=128, key=f"reg_pass_{rid_auth}")
-        pass_reg_conf = st.text_input("Confirmar Contraseña", type="password", max_chars=128, key=f"reg_pass_conf_{rid_auth}")
-        st.divider()
-        st.caption("🛡️ **Pregunta de Seguridad** (te permitirá recuperar tu cuenta si olvidas la contraseña):")
-        preg_sel_reg = st.selectbox("Elige una pregunta de seguridad", PREGUNTAS_SEGURIDAD, key=f"reg_preg_{rid_auth}")
-        if preg_sel_reg == "✍️ Escribir mi propia pregunta personalizada...":
-            preg_reg = st.text_input("Escribe tu pregunta personalizada", max_chars=120, placeholder="Ej. ¿Cuál fue mi primer gimnasio?", key=f"reg_preg_custom_{rid_auth}").strip()
-        else:
-            preg_reg = preg_sel_reg
-        resp_reg = st.text_input("Tu respuesta secreta", max_chars=100, key=f"reg_resp_{rid_auth}").strip()
-
-        if st.button("Crear Cuenta", type="primary", use_container_width=True):
-            if not user_reg or not pass_reg or not pass_reg_conf or not preg_reg or not resp_reg:
-                st.warning("Completa todos los campos (incluyendo la pregunta y respuesta de seguridad).")
-            elif not re.match(r"^[a-zA-Z0-9_.-]{3,30}$", user_reg):
-                st.error("El usuario debe tener entre 3 y 30 caracteres (solo letras, números, puntos, guiones o guion bajo, sin espacios).")
-            elif len(pass_reg) < 6:
-                st.error("La contraseña debe tener al menos 6 caracteres.")
-            elif pass_reg != pass_reg_conf:
-                st.error("Las contraseñas no coinciden.")
-            else:
-                if db.crear_usuario(user_reg, pass_reg, preg_reg, resp_reg):
-                    st.session_state.reset_id += 1
-                    st.success("¡Cuenta creada con éxito! Ahora puedes iniciar sesión.")
-                else:
-                    st.error("Ese nombre de usuario ya existe.")
-
-    elif auth_sel == "🔑 Recuperar Contraseña":
-        tiempo_restante_bloqueo = int(st.session_state.bloqueo_hasta - time.time())
-        if tiempo_restante_bloqueo > 0:
-            st.error(f"⏳ Demasiados intentos fallidos. Espera **{tiempo_restante_bloqueo} segundos** antes de volver a intentar.")
-        else:
-            st.caption("Ingresa tu nombre de usuario para ver tu pregunta de seguridad y restablecer tu contraseña.")
-            user_rec = st.text_input("Tu nombre de usuario", max_chars=30, key=f"rec_user_q_{rid_auth}").strip()
-            if user_rec:
-                existe_u, pregunta_u = db.obtener_pregunta_seguridad(user_rec)
-                if not existe_u:
-                    st.error("No existe ninguna cuenta con ese nombre de usuario.")
-                elif not pregunta_u:
-                    st.warning("Esta cuenta aún no tiene una pregunta de seguridad configurada. Inicia sesión y configúrala en la pestaña **⚙️ Perfil**.")
-                else:
-                    with st.container(border=True):
-                        st.info(f"🛡️ **Pregunta de seguridad:** {pregunta_u}")
-                        resp_rec = st.text_input("Escribe tu respuesta secreta", type="password", max_chars=100, key=f"rec_resp_q_{rid_auth}").strip()
-                        nueva_pwd_rec = st.text_input("Nueva Contraseña (mínimo 6 caracteres)", type="password", max_chars=128, key=f"rec_new_pwd_q_{rid_auth}")
-                        conf_pwd_rec = st.text_input("Confirmar Nueva Contraseña", type="password", max_chars=128, key=f"rec_conf_pwd_q_{rid_auth}")
-
-                        if st.button("✅ Restablecer Contraseña", type="primary", use_container_width=True, key=f"btn_rec_q_{rid_auth}"):
-                            if not resp_rec or not nueva_pwd_rec or not conf_pwd_rec:
-                                st.warning("Completa tu respuesta y la nueva contraseña.")
-                            elif len(nueva_pwd_rec) < 6:
-                                st.error("La nueva contraseña debe tener al menos 6 caracteres.")
-                            elif nueva_pwd_rec != conf_pwd_rec:
-                                st.error("Las contraseñas no coinciden.")
-                            elif db.recuperar_password_pregunta(user_rec, resp_rec, nueva_pwd_rec):
-                                st.session_state.intentos_fallidos = 0
-                                st.session_state.reset_id += 1
-                                st.success("🎉 ¡Contraseña restablecida con éxito! Ya puedes entrar en 'Iniciar Sesión'.")
-                            else:
-                                st.session_state.intentos_fallidos += 1
-                                restantes = MAX_INTENTOS_LOGIN - st.session_state.intentos_fallidos
-                                if restantes <= 0:
-                                    st.session_state.bloqueo_hasta = time.time() + SEGUNDOS_BLOQUEO
-                                    st.session_state.intentos_fallidos = 0
-                                    st.rerun()
-                                else:
-                                    st.error(f"Respuesta incorrecta. Intentos restantes: {restantes}")
+    mostrar_pantalla_auth()
     st.stop()
 
 usuario = st.session_state.usuario
 datos_perfil = db.obtener_perfil(usuario)
 
+# --- 2. CONFIGURACIÓN INICIAL DE PERFIL (ONBOARDING) ---
 if not datos_perfil:
-    st.title(f"👋 Bienvenido, {usuario}")
-    st.write("Cuéntame sobre ti y elige tu objetivo para configurar tus metas automáticamente.")
-    descripcion_usuario = st.text_area(
-        "¿Cuál es tu peso, altura y edad?",
-        placeholder="Ej. Tengo 21 años, mido 1.75m y peso 75 kilos.",
-        key=f"desc_inicial_{usuario}"
-    )
-    obj_inicial = st.selectbox("🎯 ¿Cuál es tu objetivo actual?", list(OBJETIVOS_CONFIG.keys()), key=f"obj_ini_{usuario}")
-    act_inicial = st.selectbox("🏃 Nivel de actividad semanal", list(NIVELES_ACTIVIDAD.keys()), index=2, key=f"act_ini_{usuario}")
-
-    if st.button("✨ Generar mi plan", type="primary", use_container_width=True):
-        if descripcion_usuario:
-            with st.spinner("Calculando macros ideales..."):
-                try:
-                    datos = ai.extraer_datos_perfil(descripcion_usuario, API_KEY)
-                    p_val, a_val, e_val = float(datos["peso"]), float(datos["altura"]), int(datos["edad"])
-                    meta_kcal, meta_prot, meta_carbs, meta_grasas, a_cm = calcular_macros_objetivo(
-                        p_val, a_val, e_val, obj_inicial, act_inicial
-                    )
-
-                    db.crear_perfil(usuario, p_val, a_cm, e_val, meta_kcal, meta_prot, meta_carbs, meta_grasas)
-                    db.registrar_peso_diario(usuario, fecha_hoy(), p_val)
-                    st.success("¡Perfil creado!")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error: {e}")
-    if st.button("Cerrar Sesión", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
+    mostrar_onboarding_perfil(usuario, API_KEY)
     st.stop()
 
-else:
-    peso, altura, edad, meta_kcal, meta_prot, meta_carbs, meta_grasas = datos_perfil
-
-    col_titulo, col_salir = st.columns([4, 1])
-    with col_titulo:
-        st.title("🔥 Fitness & Macro Tracker")
-        st.caption(f"👤 Sesión activa: **{usuario}**")
-    with col_salir:
-        if st.button("Salir 🚪", use_container_width=True):
-            st.session_state.clear()
-            st.rerun()
-
-    # --- NAVEGACIÓN CONTROLADA POR ESTADO ---
-    PESTANAS = ["🏠 Resumen", "➕ Registro", "⏳ Ayuno", "🤖 Chat IA", "⚙️ Perfil"]
-    nav_key = f"nav_principal_{usuario}"
-
-    if nav_key not in st.session_state:
-        st.session_state[nav_key] = "🏠 Resumen"
-    if "pestana_anterior" not in st.session_state:
-        st.session_state.pestana_anterior = "🏠 Resumen"
-
-    if st.session_state.get("ir_a_resumen", False):
-        st.session_state[nav_key] = "🏠 Resumen"
-        st.session_state.pestana_anterior = "🏠 Resumen"
-        st.session_state.ir_a_resumen = False
-
-    pestana_activa = st.radio(
-        "Menú principal",
-        PESTANAS,
-        horizontal=True,
-        label_visibility="collapsed",
-        key=nav_key
-    )
-
-    if pestana_activa != st.session_state.pestana_anterior:
-        st.session_state.pestana_anterior = pestana_activa
-        st.session_state.reset_id += 1
-
-    rid = st.session_state.reset_id
-    st.divider()
-
-    if f"fecha_sel_{usuario}" not in st.session_state:
-        st.session_state[f"fecha_sel_{usuario}"] = fecha_hoy()
-    fecha_activa = st.session_state[f"fecha_sel_{usuario}"]
-
-    # --- PESTAÑA 1: RESUMEN DEL DÍA ---
-    if pestana_activa == "🏠 Resumen":
-        if st.session_state.get("mensaje_exito"):
-            st.success(st.session_state.mensaje_exito)
-            st.session_state.mensaje_exito = ""
-
-        nueva_fecha = st.date_input("📅 Fecha", value=fecha_activa, key=f"fecha_widget_{usuario}")
-        if nueva_fecha != fecha_activa:
-            st.session_state[f"fecha_sel_{usuario}"] = nueva_fecha
-            st.rerun()
-
-        comidas_hoy = db.obtener_comidas_por_fecha(usuario, fecha_activa)
-        ejercicios_hoy = db.obtener_ejercicios_por_fecha(usuario, fecha_activa)
-
-        kcal_hoy = sum(x[2] for x in comidas_hoy)
-        prot_hoy = sum(x[3] for x in comidas_hoy)
-        carbs_hoy = sum(x[4] for x in comidas_hoy)
-        grasas_hoy = sum(x[5] for x in comidas_hoy)
-        kcal_quemadas_hoy = sum(x[3] for x in ejercicios_hoy)
-
-        meta_kcal_ajustada = meta_kcal + kcal_quemadas_hoy
-        kcal_restantes = meta_kcal_ajustada - kcal_hoy
-        prot_restante = meta_prot - prot_hoy
-        carbs_restantes = meta_carbs - carbs_hoy
-        grasas_restantes = meta_grasas - grasas_hoy
-
-        with st.container(border=True):
-            st.caption("🔥 **RESUMEN DE CALORÍAS DEL DÍA**")
-            c_kcal1, c_kcal2, c_kcal3, c_kcal4 = st.columns(4)
-            c_kcal1.metric("🎯 Meta Base", f"{meta_kcal}", "kcal")
-            c_kcal2.metric("🍽️ Comidas", f"{kcal_hoy}", "kcal consumidas")
-            c_kcal3.metric(
-                "🏃 Ejercicio",
-                f"{kcal_quemadas_hoy}",
-                delta=f"+{kcal_quemadas_hoy} kcal extra" if kcal_quemadas_hoy > 0 else "0 kcal",
-                delta_color="normal" if kcal_quemadas_hoy > 0 else "off"
-            )
-            c_kcal4.metric(
-                "🔥 Restantes",
-                f"{kcal_restantes}",
-                delta="Disponibles" if kcal_restantes >= 0 else f"Exceso ({abs(kcal_restantes)})",
-                delta_color="normal" if kcal_restantes >= 0 else "inverse"
-            )
-            st.progress(min(max(kcal_hoy, 0) / max(meta_kcal_ajustada, 1), 1.0))
-
-            st.divider()
-            st.caption("📊 **MACRONUTRIENTES DEL DÍA**")
-            col_m1, col_m2, col_m3 = st.columns(3)
-            with col_m1:
-                st.metric("🥩 Proteína", f"{prot_hoy} / {meta_prot}g", f"Faltan {max(prot_restante, 0)}g" if prot_restante > 0 else "¡Meta lograda!")
-                st.progress(min(prot_hoy / max(meta_prot, 1), 1.0))
-            with col_m2:
-                st.metric("🍚 Carbohidratos", f"{carbs_hoy} / {meta_carbs}g", f"Restan {carbs_restantes}g" if carbs_restantes >= 0 else f"+{abs(carbs_restantes)}g")
-                st.progress(min(carbs_hoy / max(meta_carbs, 1), 1.0))
-            with col_m3:
-                st.metric("🥑 Grasas", f"{grasas_hoy} / {meta_grasas}g", f"Restan {grasas_restantes}g" if grasas_restantes >= 0 else f"+{abs(grasas_restantes)}g")
-                st.progress(min(grasas_hoy / max(meta_grasas, 1), 1.0))
-
-        with st.expander(f"📋 Consumido hoy ({len(comidas_hoy)} comidas — {kcal_hoy} kcal)", expanded=True):
-            if not comidas_hoy:
-                st.info("No has registrado comidas aún.")
-            else:
-                for id_c, nom, k, p, c, g in comidas_hoy:
-                    with st.container(border=True):
-                        col_t, col_b = st.columns([5, 1])
-                        with col_t:
-                            st.markdown(f"**{nom}**")
-                            st.caption(f"🔥 **{k} kcal** ｜ 🥩 **{p}g** Prot ｜ 🍚 **{c}g** Carbs ｜ 🥑 **{g}g** Grasas")
-                        with col_b:
-                            if st.button("🗑️", key=f"del_{usuario}_{id_c}"):
-                                db.eliminar_comida(id_c, usuario)
-                                st.rerun()
-
-        with st.expander(f"🏃 Ejercicio realizado hoy ({len(ejercicios_hoy)} sesiones — -{kcal_quemadas_hoy} kcal)", expanded=False):
-            if not ejercicios_hoy:
-                st.caption("No has registrado actividad física hoy. Puedes agregarla en la pestaña **➕ Registro**.")
-            else:
-                for id_ej, nom_ej, dur_ej, kcal_ej in ejercicios_hoy:
-                    with st.container(border=True):
-                        col_et, col_eb = st.columns([5, 1])
-                        with col_et:
-                            st.markdown(f"**{nom_ej}**")
-                            st.caption(f"⏱️ **{dur_ej} min** ｜ 🔥 **-{kcal_ej} kcal quemadas**")
-                        with col_eb:
-                            if st.button("🗑️", key=f"del_ej_{usuario}_{id_ej}"):
-                                db.eliminar_ejercicio(id_ej, usuario)
-                                st.rerun()
-
-        with st.expander("📊 Balance Semanal (Últimos 7 días)", expanded=False):
-            fechas_7d = [fecha_activa - timedelta(days=i) for i in range(6, -1, -1)]
-            resumen_7d = db.obtener_resumen_dias(usuario, fechas_7d)
-            quemadas_7d = db.obtener_kcal_quemadas_dias(usuario, fechas_7d)
-            dias_con_registro = len(resumen_7d)
-
-            if dias_con_registro == 0:
-                st.caption("Registra tus comidas durante la semana para ver tu promedio de calorías y la grasa estimada oxidada.")
-            else:
-                total_kcal_sem = sum(v[0] for v in resumen_7d.values())
-                total_prot_sem = sum(v[1] for v in resumen_7d.values())
-                total_quemadas_sem = sum(quemadas_7d.values())
-                prom_kcal = int(total_kcal_sem / dias_con_registro)
-                prom_prot = int(total_prot_sem / dias_con_registro)
-                dias_en_meta = sum(
-                    1 for f_key, v in resumen_7d.items()
-                    if v[0] <= (meta_kcal + quemadas_7d.get(f_key, 0) + 100)
-                )
-
-                alt_cm_sem = float(altura) * 100.0 if float(altura) < 3.0 else float(altura)
-                mantenimiento_est = int(((10.0 * float(peso)) + (6.25 * alt_cm_sem) - (5.0 * int(edad)) + 5.0) * 1.55)
-                deficit_acumulado = sum(
-                    (mantenimiento_est + quemadas_7d.get(f_key, 0) - v[0])
-                    for f_key, v in resumen_7d.items()
-                )
-                grasa_oxidada_g = max(int(deficit_acumulado / 7.7), 0)
-
-                col_s1, col_s2, col_s3 = st.columns(3)
-                col_s1.metric("Promedio Consumido", f"{prom_kcal} kcal", f"🥩 {prom_prot}g Prot/día")
-                col_s2.metric("Ejercicio Semanal", f"-{total_quemadas_sem} kcal", f"En meta: {dias_en_meta}/{dias_con_registro} días")
-                col_s3.metric(
-                    "🔥 Grasa Oxidada Est.",
-                    f"{grasa_oxidada_g} g",
-                    f"Déficit: {max(deficit_acumulado, 0)} kcal"
-                )
-                st.bar_chart({str(f)[5:]: resumen_7d.get(str(f), (0, 0))[0] for f in fechas_7d})
-
-        with st.expander(f"⚖️ Evolución de Peso (Actual: {peso} kg)", expanded=False):
-            col_p1, col_p2 = st.columns([2, 1])
-            peso_hoy_input = col_p1.number_input("Peso (kg)", value=float(peso), step=0.1, key=f"peso_diario_{usuario}_{rid}")
-            if col_p2.button("Guardar", key=f"btn_peso_{usuario}"):
-                db.registrar_peso_diario(usuario, fecha_activa, peso_hoy_input)
-                st.rerun()
-            historial = db.obtener_historial_peso(usuario)
-            if historial:
-                st.line_chart({fila[0]: fila[1] for fila in historial[-14:]})
-
-    # --- PESTAÑA 2: REGISTRO (Muestra confirmación, limpia inputs y redirige a 🏠 Resumen) ---
-    elif pestana_activa == "➕ Registro":
-        st.caption(f"📅 Registrando para el día: **{fecha_activa}**")
-
-        with st.expander("✍️ Registrar Comida por Texto con IA", expanded=True):
-            comida_ia = st.text_input("¿Qué comiste?", placeholder="Ej. 200g pollo y arroz", key=f"comida_txt_{usuario}_{rid}").strip()
-            if st.button("Calcular macros", type="primary", use_container_width=True, key=f"btn_txt_{usuario}"):
-                if not comida_ia:
-                    st.warning("Escribe qué comiste antes de calcular.")
-                else:
-                    datos = None
-                    with st.spinner("Analizando comida con IA..."):
-                        try:
-                            datos = ai.calcular_macros_texto(comida_ia, API_KEY)
-                        except Exception as e:
-                            st.error(f"Error: {e}")
-                    if datos:
-                        db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
-                        _confirmar_y_redirigir(
-                            f"✅ Comida registrada: **{datos['nombre']}** — "
-                            f"🔥 {datos['kcal']} kcal ｜ 🥩 {datos['proteina']}g P ｜ 🍚 {datos['carbs']}g C ｜ 🥑 {datos['grasas']}g G"
-                        )
-
-        with st.expander("📸 Escáner Visual (Foto del plato)", expanded=False):
-            foto_plato = st.file_uploader("Toma o sube una foto", type=["jpg", "jpeg", "png"], key=f"foto_{usuario}_{rid}")
-            if foto_plato and st.button("Analizar foto", type="primary", use_container_width=True, key=f"btn_foto_{usuario}"):
-                datos_img = None
-                with st.spinner("Analizando imagen con IA..."):
-                    try:
-                        datos_img = ai.calcular_macros_imagen(foto_plato, API_KEY)
-                    except Exception as e:
-                        st.error(f"Fallo en servidor de IA, intenta más tarde. Detalle: {e}")
-                if datos_img:
-                    db.agregar_comida(usuario, fecha_activa, datos_img["nombre"], datos_img["kcal"], datos_img["proteina"], datos_img["carbs"], datos_img["grasas"])
-                    _confirmar_y_redirigir(
-                        f"✅ Foto registrada: **{datos_img['nombre']}** — "
-                        f"🔥 {datos_img['kcal']} kcal ｜ 🥩 {datos_img['proteina']}g P ｜ 🍚 {datos_img['carbs']}g C ｜ 🥑 {datos_img['grasas']}g G"
-                    )
-
-        with st.expander("🏷️ Registro Manual Rápido (Etiqueta Nutricional)", expanded=False):
-            st.caption("Ideal cuando ya conoces los valores de un empaque o porción. Si dejas Kcal en 0, se calcularán automáticamente a partir de los macros.")
-            nom_manual = st.text_input("Nombre del alimento o comida", placeholder="Ej. Yogurt Griego / Scoop de Whey", key=f"man_nom_{usuario}_{rid}").strip()
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            kcal_man = col_m1.number_input("Kcal", min_value=0, max_value=5000, value=0, step=10, key=f"man_kcal_{usuario}_{rid}")
-            prot_man = col_m2.number_input("Proteína (g)", min_value=0, max_value=500, value=0, step=1, key=f"man_prot_{usuario}_{rid}")
-            carbs_man = col_m3.number_input("Carbs (g)", min_value=0, max_value=500, value=0, step=1, key=f"man_carbs_{usuario}_{rid}")
-            grasas_man = col_m4.number_input("Grasas (g)", min_value=0, max_value=500, value=0, step=1, key=f"man_grasas_{usuario}_{rid}")
-
-            if st.button("➕ Guardar comida manual", use_container_width=True, key=f"btn_man_{usuario}"):
-                if nom_manual:
-                    kcal_final = int(kcal_man) if kcal_man > 0 else int((prot_man * 4) + (carbs_man * 4) + (grasas_man * 9))
-                    db.agregar_comida(usuario, fecha_activa, nom_manual, kcal_final, int(prot_man), int(carbs_man), int(grasas_man))
-                    _confirmar_y_redirigir(f"✅ Guardado manual: **{nom_manual}** ({kcal_final} kcal)")
-                else:
-                    st.warning("Escribe el nombre del alimento para guardarlo.")
-
-        with st.expander("🏃 Registrar Ejercicio (Gasto Calórico)", expanded=False):
-            st.markdown("##### 🤖 Calcular gasto con IA (según tu peso actual)")
-            ej_texto = st.text_input(
-                "Describe tu entrenamiento o cardio",
-                placeholder="Ej. 45 min de pesas de torso y 20 min de caminadora inclinada",
-                key=f"ej_txt_{usuario}_{rid}"
-            ).strip()
-            if st.button("🔥 Calcular y guardar ejercicio", use_container_width=True, key=f"btn_ej_ia_{usuario}") and ej_texto:
-                datos_ej = None
-                with st.spinner("Calculando calorías quemadas según tu peso..."):
-                    try:
-                        datos_ej = ai.calcular_gasto_ejercicio(ej_texto, peso, API_KEY)
-                    except Exception as e:
-                        st.error(f"Error al calcular ejercicio: {e}")
-                if datos_ej:
-                    db.agregar_ejercicio(
-                        usuario, fecha_activa,
-                        datos_ej["nombre"], datos_ej["duracion_min"], datos_ej["kcal_quemadas"]
-                    )
-                    _confirmar_y_redirigir(f"🏃 Ejercicio registrado: **{datos_ej['nombre']}** (-{datos_ej['kcal_quemadas']} kcal)")
-
-            st.divider()
-            st.markdown("##### ⌚ Registro manual de ejercicio (Smartwatch / Máquina)")
-            col_e1, col_e2, col_e3 = st.columns([2, 1, 1])
-            nom_ej_man = col_e1.text_input("Actividad", placeholder="Ej. Cardio HIIT / Pesas", key=f"man_ej_nom_{usuario}_{rid}").strip()
-            dur_ej_man = col_e2.number_input("Minutos", min_value=1, max_value=600, value=30, step=5, key=f"man_ej_dur_{usuario}_{rid}")
-            kcal_ej_man = col_e3.number_input("Kcal quemadas", min_value=1, max_value=5000, value=200, step=10, key=f"man_ej_kcal_{usuario}_{rid}")
-            if st.button("➕ Guardar ejercicio manual", use_container_width=True, key=f"btn_ej_man_{usuario}"):
-                if nom_ej_man:
-                    db.agregar_ejercicio(usuario, fecha_activa, nom_ej_man, int(dur_ej_man), int(kcal_ej_man))
-                    _confirmar_y_redirigir(f"🏃 Ejercicio registrado: **{nom_ej_man}** (-{kcal_ej_man} kcal)")
-                else:
-                    st.warning("Escribe el nombre de la actividad.")
-
-    # --- PESTAÑA 3: AYUNO INTERMITENTE ---
-    elif pestana_activa == "⏳ Ayuno":
-        st.subheader("⏳ Ayuno Intermitente")
-        datos_ayuno = db.obtener_ayuno(usuario)
-        ayuno_activo = bool(datos_ayuno and datos_ayuno[2] == 1)
-
-        if not ayuno_activo:
-            st.caption("🟢 **Estado actual:** En ventana de alimentación (sin ayuno activo)")
-
-            with st.container(border=True):
-                st.markdown("#### 1. Elige tu protocolo")
-                protocolos = {
-                    "⭐ 16:8 — Estándar (16h ayuno / 8h comida)": 16,
-                    "🌱 14:10 — Principiante (14h ayuno / 10h comida)": 14,
-                    "🔥 18:6 — Avanzado (18h ayuno / 6h comida)": 18,
-                    "⚡ 20:4 — Guerrero (20h ayuno / 4h comida)": 20,
-                    "⚙️ Personalizado": 0
-                }
-                seleccion = st.selectbox("Protocolo de ayuno", list(protocolos.keys()), key=f"prot_ayuno_{usuario}")
-                if seleccion == "⚙️ Personalizado":
-                    horas_obj = st.slider("Horas de ayuno objetivo", min_value=12, max_value=36, value=16, key=f"slider_ayuno_{usuario}")
-                else:
-                    horas_obj = protocolos[seleccion]
-
-                st.markdown("#### 2. ¿Cuándo terminaste tu última comida?")
-                modo_inicio = st.radio(
-                    "Momento de inicio",
-                    ["Empezar ahora mismo", "Elegir la hora de mi última comida"],
-                    horizontal=True,
-                    label_visibility="collapsed",
-                    key=f"modo_inicio_ayuno_{usuario}"
-                )
-
-                ahora_dt = ahora_local()
-                if modo_inicio == "Empezar ahora mismo":
-                    inicio_previsto = ahora_dt
-                else:
-                    hora_elegida = st.time_input(
-                        "Hora de tu última comida",
-                        value=ahora_dt.replace(minute=0, second=0, microsecond=0).time(),
-                        key=f"hora_comida_ayuno_{usuario}"
-                    )
-                    inicio_previsto = ahora_dt.replace(
-                        hour=hora_elegida.hour, minute=hora_elegida.minute, second=0, microsecond=0
-                    )
-                    if inicio_previsto > ahora_dt:
-                        inicio_previsto -= timedelta(days=1)
-
-                fin_previsto = inicio_previsto + timedelta(hours=horas_obj)
-                etiqueta_dia = "hoy" if fin_previsto.date() == ahora_dt.date() else "mañana"
-
-                st.info(
-                    f"🎯 **Vista previa:** Tu ayuno de **{horas_obj}h** cuenta desde las **{inicio_previsto.strftime('%I:%M %p')}** "
-                    f"y podrás volver a comer **{etiqueta_dia} a las {fin_previsto.strftime('%I:%M %p')}**."
-                )
-
-                if st.button("▶️ Iniciar Ayuno", type="primary", use_container_width=True, key=f"btn_iniciar_ayuno_{usuario}"):
-                    db.iniciar_ayuno(usuario, inicio_previsto.isoformat(), horas_obj)
-                    st.rerun()
-        else:
-            inicio_iso, horas_meta, _ = datos_ayuno
-            inicio_dt = datetime.fromisoformat(inicio_iso)
-            if inicio_dt.tzinfo is None:
-                inicio_dt = inicio_dt.replace(tzinfo=ZONA_HORARIA)
-            fin_dt = inicio_dt + timedelta(hours=horas_meta)
-            ahora_dt = ahora_local()
-
-            segundos_transcurridos = max((ahora_dt - inicio_dt).total_seconds(), 0)
-            horas_transcurridas = segundos_transcurridos / 3600.0
-            segundos_meta = horas_meta * 3600.0
-            progreso = min(segundos_transcurridos / max(segundos_meta, 1), 1.0)
-            porcentaje = int(progreso * 100)
-
-            h_trans = int(segundos_transcurridos // 3600)
-            m_trans = int((segundos_transcurridos % 3600) // 60)
-            segundos_restantes = max(segundos_meta - segundos_transcurridos, 0)
-            h_rest = int(segundos_restantes // 3600)
-            m_rest = int((segundos_restantes % 3600) // 60)
-
-            with st.container(border=True):
-                st.markdown(f"🔥 **Ayuno {horas_meta}:{max(24 - horas_meta, 0)} en curso** — **{porcentaje}% completado**")
-                st.progress(progreso)
-
-                col_a1, col_a2, col_a3 = st.columns(3)
-                col_a1.metric("Tiempo en Ayuno", f"{h_trans}h {m_trans}m", f"Meta: {horas_meta}h")
-                col_a2.metric(
-                    "Tiempo Restante",
-                    f"{h_rest}h {m_rest}m" if segundos_restantes > 0 else "¡Meta lograda! 🎉",
-                    delta="En curso" if segundos_restantes > 0 else "Completado"
-                )
-                col_a3.metric("Hora para comer", fin_dt.strftime("%I:%M %p"), f"Inicio: {inicio_dt.strftime('%I:%M %p')}")
-
-                if horas_transcurridas < 4:
-                    etapa = "🍽️ **Fase 1 (0–4h): Digestión** — Procesando nutrientes de tu última comida."
-                elif horas_transcurridas < 8:
-                    etapa = "📉 **Fase 2 (4–8h): Caída de insulina** — Baja la glucosa y empiezas a usar reservas."
-                elif horas_transcurridas < 12:
-                    etapa = "🔥 **Fase 3 (8–12h): Quema de glucógeno** — Tu cuerpo empieza a recurrir a la grasa."
-                elif horas_transcurridas < 16:
-                    etapa = "⚡ **Fase 4 (12–16h): Lipólisis activa** — Quema de grasa acelerada ideal para definición."
-                else:
-                    etapa = "🧬 **Fase 5 (+16h): Autofagia** — Renovación celular y máxima oxidación de grasas."
-
-                st.info(etapa)
-
-                col_btn1, col_btn2 = st.columns(2)
-                if col_btn1.button("🔄 Actualizar tiempo", use_container_width=True, key=f"btn_ref_ayuno_{usuario}"):
-                    st.rerun()
-                if col_btn2.button("✅ Terminar y Guardar", type="primary", use_container_width=True, key=f"btn_fin_ayuno_{usuario}"):
-                    protocolo_str = f"{horas_meta}:{max(24 - horas_meta, 0)}"
-                    db.detener_ayuno(usuario, fecha_hoy(), protocolo_str, horas_transcurridas, horas_meta)
-                    st.success(f"¡Ayuno guardado! Completaste {h_trans}h {m_trans}m.")
-                    st.rerun()
-
-                with st.expander("⚙️ Opciones adicionales (Corregir o cancelar ayuno)"):
-                    st.caption("Si iniciaste el ayuno por error, puedes descartarlo sin que afecte tu historial.")
-                    if st.button("🗑️ Descartar ayuno actual sin guardar", use_container_width=True, key=f"btn_cancel_ayuno_{usuario}"):
-                        db.cancelar_ayuno(usuario)
-                        st.rerun()
-
-        with st.expander("ℹ️ Guía rápida: ¿Qué puedo consumir durante el ayuno?"):
-            st.markdown(
-                "- ✅ **Permitido (0 kcal):** Agua natural o con gas, café negro sin azúcar, té o infusiones sin endulzar, sal/electrolitos.\n"
-                "- ❌ **Rompe el ayuno:** Azúcar, leche, crema, aceite, caldos con grasa, proteína en polvo o snacks."
-            )
-
-        with st.expander("📜 Historial de Ayunos", expanded=False):
-            hist_ayunos = db.obtener_historial_ayunos(usuario)
-            if not hist_ayunos:
-                st.info("Aún no tienes ayunos completados registrados.")
-            else:
-                for id_ay, f_ay, prot_ay, h_comp, h_m in hist_ayunos:
-                    cumplido = "✅ Meta cumplida" if h_comp >= h_m else "⚠️ Parcial"
-                    with st.container(border=True):
-                        col_h1, col_h2 = st.columns([5, 1])
-                        with col_h1:
-                            st.markdown(f"📅 **{f_ay}** — Protocolo **{prot_ay}** ({cumplido})")
-                            st.caption(f"⏱️ Duración completada: **{h_comp:.1f} horas** de {h_m}h objetivo")
-                        with col_h2:
-                            if st.button("🗑️", key=f"del_ayuno_{usuario}_{id_ay}"):
-                                db.eliminar_historial_ayuno(id_ay, usuario)
-                                st.rerun()
-
-    # --- PESTAÑA 4: CHAT IA ---
-    elif pestana_activa == "🤖 Chat IA":
-        if "mensajes" not in st.session_state:
-            st.session_state.mensajes = []
-
-        st.caption("⚡ **Consultas rápidas:**")
-        col_q1, col_q2, col_q3, col_q4 = st.columns([2, 2, 2, 1])
-        pregunta_rapida = None
-        if col_q1.button("🍽️ ¿Qué como con mis macros restantes?", use_container_width=True, key=f"q1_{usuario}"):
-            pregunta_rapida = "¿Qué opciones de comida me recomiendas para cuadrar exactamente las calorías y macros que me faltan hoy?"
-        if col_q2.button("🥩 ¿Cómo llego a mi proteína hoy?", use_container_width=True, key=f"q2_{usuario}"):
-            pregunta_rapida = "¿Qué alimentos bajos en calorías puedo agregar hoy para completar mi meta de proteína sin pasarme de grasas ni carbohidratos?"
-        if col_q3.button("📊 Evalúa mi día de hoy", use_container_width=True, key=f"q3_{usuario}"):
-            pregunta_rapida = "Evalúa cómo van mis calorías, macronutrientes y ayuno de hoy y dame un consejo práctico."
-        if col_q4.button("🧹 Limpiar", use_container_width=True, key=f"q_clear_{usuario}"):
-            st.session_state.mensajes = []
-            st.rerun()
-
-        contenedor_chat = st.container(height=420)
-
-        with contenedor_chat:
-            if not st.session_state.mensajes:
-                st.info(f"👋 ¡Hola, {usuario}! Toca uno de los botones rápidos de arriba o escribe tu consulta abajo.")
-            for msg in st.session_state.mensajes:
-                with st.chat_message(msg["rol"]):
-                    st.markdown(msg["texto"])
-
-        pregunta_input = st.chat_input("Consulta sobre tu dieta o entrenamiento...", key=f"chat_input_{usuario}_{rid}")
-        pregunta = pregunta_rapida or pregunta_input
-
-        if pregunta:
-            comidas_hoy = db.obtener_comidas_por_fecha(usuario, fecha_activa)
-            ejercicios_hoy = db.obtener_ejercicios_por_fecha(usuario, fecha_activa)
-            datos_ayuno = db.obtener_ayuno(usuario)
-            ayuno_activo = bool(datos_ayuno and datos_ayuno[2] == 1)
-
-            kcal_hoy = sum(x[2] for x in comidas_hoy)
-            prot_hoy = sum(x[3] for x in comidas_hoy)
-            carbs_hoy = sum(x[4] for x in comidas_hoy)
-            grasas_hoy = sum(x[5] for x in comidas_hoy)
-            kcal_quemadas_hoy = sum(x[3] for x in ejercicios_hoy)
-            kcal_restantes = (meta_kcal + kcal_quemadas_hoy) - kcal_hoy
-            prot_restante = meta_prot - prot_hoy
-            carbs_restantes = meta_carbs - carbs_hoy
-            grasas_restantes = meta_grasas - grasas_hoy
-
-            estado_ayuno_str = "No está en ayuno actualmente."
-            if ayuno_activo:
-                inicio_iso, horas_meta, _ = datos_ayuno
-                inicio_dt = datetime.fromisoformat(inicio_iso)
-                if inicio_dt.tzinfo is None:
-                    inicio_dt = inicio_dt.replace(tzinfo=ZONA_HORARIA)
-                seg_t = max((ahora_local() - inicio_dt).total_seconds(), 0)
-                estado_ayuno_str = f"En ayuno activo ({int(seg_t // 3600)}h {int((seg_t % 3600) // 60)}m de {horas_meta}h)."
-
-            st.session_state.mensajes.append({"rol": "user", "texto": pregunta})
-            with contenedor_chat:
-                with st.chat_message("user"):
-                    st.markdown(pregunta)
-
-                lista_comidas_str = ", ".join([f"{nom} ({k} kcal, {p}g P, {c}g C, {g}g G)" for _, nom, k, p, c, g in comidas_hoy]) if comidas_hoy else "Ninguna hoy."
-                lista_ej_str = ", ".join([f"{nom_e} ({dur_e} min, -{kcal_e} kcal)" for _, nom_e, dur_e, kcal_e in ejercicios_hoy]) if ejercicios_hoy else "Ninguno registrado hoy."
-
-                alt_cm_ctx = float(altura) * 100.0 if float(altura) < 3.0 else float(altura)
-                mant_aprox = int(((10.0 * float(peso)) + (6.25 * alt_cm_ctx) - (5.0 * int(edad)) + 5.0) * 1.55)
-                if meta_kcal < mant_aprox - 150:
-                    etapa_actual = "Definición / Pérdida de grasa (Déficit calórico)"
-                elif meta_kcal > mant_aprox + 150:
-                    etapa_actual = "Volumen / Hipertrofia (Superávit calórico)"
-                else:
-                    etapa_actual = "Mantenimiento / Recomposición corporal"
-
-                contexto = (
-                    f"Usuario: {usuario}. Perfil físico: {peso}kg, {alt_cm_ctx:.0f}cm, {edad} años. "
-                    f"Etapa actual: {etapa_actual}. "
-                    f"Metas diarias base: {meta_kcal}kcal, {meta_prot}g Proteína, {meta_carbs}g Carbs, {meta_grasas}g Grasas. "
-                    f"Consumido hoy: {kcal_hoy}kcal, {prot_hoy}g P, {carbs_hoy}g C, {grasas_hoy}g G. "
-                    f"Ejercicio hoy: quemó {kcal_quemadas_hoy}kcal ({lista_ej_str}). "
-                    f"Restante para hoy: {kcal_restantes}kcal disponibles, faltan {max(prot_restante, 0)}g P, restan {carbs_restantes}g C y {grasas_restantes}g G. "
-                    f"Ayuno intermitente: {estado_ayuno_str} "
-                    f"Comidas registradas hoy: {lista_comidas_str}."
-                )
-
-                with st.chat_message("assistant"):
-                    try:
-                        historial_previo = st.session_state.mensajes[:-1]
-                        generador_ia = ai.consultar_asistente_stream(pregunta, contexto, API_KEY, historial_previo)
-                        caja_texto = st.empty()
-                        texto_ia = ""
-                        for pedazo in generador_ia:
-                            texto_ia += pedazo
-                            caja_texto.markdown(texto_ia + "▌")
-                        caja_texto.markdown(texto_ia)
-                        st.session_state.mensajes.append({"rol": "assistant", "texto": texto_ia})
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-
-    # --- PESTAÑA 5: PERFIL ---
-    elif pestana_activa == "⚙️ Perfil":
-        st.subheader(f"⚙️ Configuración de {usuario}")
-
-        with st.expander("🎯 Cambiar Objetivo y Recalcular Macros Automáticamente", expanded=True):
-            st.caption("Actualiza tus datos o tu etapa física (Definición, Mantenimiento o Volumen) para recalcular tus metas ideales.")
-            col_pf1, col_pf2, col_pf3 = st.columns(3)
-            altura_cm_def = float(altura) * 100.0 if float(altura) < 3.0 else float(altura)
-            peso_calc = col_pf1.number_input("Peso (kg)", min_value=30.0, max_value=250.0, value=float(peso), step=0.5, key=f"calc_peso_{usuario}_{rid}")
-            altura_calc = col_pf2.number_input("Altura (cm)", min_value=100.0, max_value=230.0, value=float(altura_cm_def), step=1.0, key=f"calc_alt_{usuario}_{rid}")
-            edad_calc = col_pf3.number_input("Edad (años)", min_value=12, max_value=100, value=int(edad), step=1, key=f"calc_edad_{usuario}_{rid}")
-
-            obj_sel = st.selectbox("🎯 Objetivo físico", list(OBJETIVOS_CONFIG.keys()), key=f"calc_obj_{usuario}_{rid}")
-            act_sel = st.selectbox("🏃 Nivel de actividad semanal", list(NIVELES_ACTIVIDAD.keys()), index=2, key=f"calc_act_{usuario}_{rid}")
-
-            k_sug, p_sug, c_sug, g_sug, a_cm_final = calcular_macros_objetivo(peso_calc, altura_calc, edad_calc, obj_sel, act_sel)
-            st.info(
-                f"📊 **Nuevas metas sugeridas:** 🔥 **{k_sug} kcal** ｜ "
-                f"🥩 **{p_sug}g** Proteína ｜ 🍚 **{c_sug}g** Carbs ｜ 🥑 **{g_sug}g** Grasas"
-            )
-
-            if st.button("✨ Aplicar nuevas metas recomendadas", type="primary", use_container_width=True, key=f"btn_recalc_{usuario}"):
-                db.actualizar_perfil(usuario, peso_calc, a_cm_final, int(edad_calc), k_sug, p_sug, c_sug, g_sug)
-                _confirmar_y_redirigir(f"🎯 Nuevas metas aplicadas: {k_sug} kcal ｜ {p_sug}g P ｜ {c_sug}g C ｜ {g_sug}g G")
-
-        with st.expander("🎛️ Ajuste Manual de Macros", expanded=False):
-            st.caption("Si prefieres fijar tus calorías y gramos de cada macronutriente manualmente:")
-            nuevo_peso = st.number_input("Peso actual (kg)", value=float(peso), key=f"perfil_peso_{usuario}_{rid}")
-            nueva_kcal = st.number_input("Kcal Objetivo", value=int(meta_kcal), step=50, key=f"perfil_kcal_{usuario}_{rid}")
-            nueva_prot = st.number_input("Proteína (g)", value=int(meta_prot), key=f"perfil_prot_{usuario}_{rid}")
-            nuevos_carbs = st.number_input("Carbohidratos (g)", value=int(meta_carbs), key=f"perfil_carbs_{usuario}_{rid}")
-            nuevas_grasas = st.number_input("Grasas (g)", value=int(meta_grasas), key=f"perfil_grasas_{usuario}_{rid}")
-
-            if st.button("Guardar Ajuste Manual", use_container_width=True, key=f"btn_perfil_{usuario}"):
-                db.actualizar_perfil(usuario, nuevo_peso, altura, edad, nueva_kcal, nueva_prot, nuevos_carbs, nuevas_grasas)
-                _confirmar_y_redirigir("✅ Perfil actualizado manualmente.")
-
-        _, pregunta_actual_usr = db.obtener_pregunta_seguridad(usuario)
-        with st.expander("🛡️ Pregunta de Seguridad (Recuperación de Contraseña)", expanded=not bool(pregunta_actual_usr)):
-            if not pregunta_actual_usr:
-                st.warning("⚠️ Aún no has configurado tu pregunta de seguridad. Configúrala aquí para poder recuperar tu contraseña si la olvidas.")
-            else:
-                st.caption(f"Pregunta actual configurada: **{pregunta_actual_usr}**")
-            idx_preg = PREGUNTAS_SEGURIDAD.index(pregunta_actual_usr) if pregunta_actual_usr in PREGUNTAS_SEGURIDAD else 0
-            preg_sel_usr = st.selectbox("Pregunta de seguridad", PREGUNTAS_SEGURIDAD, index=idx_preg, key=f"preg_perfil_{usuario}_{rid}")
-            if preg_sel_usr == "✍️ Escribir mi propia pregunta personalizada...":
-                nueva_preg_usr = st.text_input("Escribe tu pregunta personalizada", max_chars=120, key=f"preg_custom_{usuario}_{rid}").strip()
-            else:
-                nueva_preg_usr = preg_sel_usr
-            nueva_resp_usr = st.text_input("Respuesta secreta", type="password", max_chars=100, key=f"resp_perfil_{usuario}_{rid}").strip()
-            if st.button("Guardar Pregunta de Seguridad", use_container_width=True, key=f"btn_preg_{usuario}"):
-                if not nueva_preg_usr or not nueva_resp_usr:
-                    st.warning("Completa la pregunta y escribe una respuesta secreta.")
-                else:
-                    db.guardar_pregunta_seguridad(usuario, nueva_preg_usr, nueva_resp_usr)
-                    st.session_state.reset_id += 1
-                    st.success("✅ Pregunta y respuesta de seguridad guardadas (encriptadas).")
-                    st.rerun()
-
-        with st.expander("🔐 Seguridad: Cambiar Contraseña", expanded=False):
-            pwd_actual = st.text_input("Contraseña actual", type="password", key=f"pwd_act_{usuario}_{rid}")
-            pwd_nueva = st.text_input("Nueva contraseña (mínimo 6 caracteres)", type="password", key=f"pwd_new_{usuario}_{rid}")
-            pwd_conf = st.text_input("Confirmar nueva contraseña", type="password", key=f"pwd_conf_{usuario}_{rid}")
-            if st.button("Actualizar Contraseña", use_container_width=True, key=f"btn_pwd_{usuario}"):
-                if not pwd_actual or not pwd_nueva or not pwd_conf:
-                    st.warning("Completa todos los campos.")
-                elif len(pwd_nueva) < 6:
-                    st.error("La nueva contraseña debe tener al menos 6 caracteres.")
-                elif pwd_nueva != pwd_conf:
-                    st.error("La nueva contraseña y su confirmación no coinciden.")
-                elif db.cambiar_password(usuario, pwd_actual, pwd_nueva):
-                    st.session_state.reset_id += 1
-                    st.success("✅ Contraseña actualizada correctamente.")
-                else:
-                    st.error("La contraseña actual es incorrecta.")
+# --- 3. ENCABEZADO Y NAVEGACIÓN PRINCIPAL ---
+peso = datos_perfil[0]
+
+col_titulo, col_salir = st.columns([4, 1])
+with col_titulo:
+    st.title("🔥 Fitness & Macro Tracker")
+    st.caption(f"👤 Sesión activa: **{usuario}**")
+with col_salir:
+    if st.button("Salir 🚪", use_container_width=True):
+        st.session_state.clear()
+        st.rerun()
+
+PESTANAS = ["🏠 Resumen", "➕ Registro", "⏳ Ayuno", "🤖 Chat IA", "⚙️ Perfil"]
+nav_key = f"nav_principal_{usuario}"
+
+if nav_key not in st.session_state:
+    st.session_state[nav_key] = "🏠 Resumen"
+if "pestana_anterior" not in st.session_state:
+    st.session_state.pestana_anterior = "🏠 Resumen"
+
+if st.session_state.get("ir_a_resumen", False):
+    st.session_state[nav_key] = "🏠 Resumen"
+    st.session_state.pestana_anterior = "🏠 Resumen"
+    st.session_state.ir_a_resumen = False
+
+pestana_activa = st.radio(
+    "Menú principal",
+    PESTANAS,
+    horizontal=True,
+    label_visibility="collapsed",
+    key=nav_key
+)
+
+if pestana_activa != st.session_state.pestana_anterior:
+    st.session_state.pestana_anterior = pestana_activa
+    st.session_state.reset_id += 1
+
+rid = st.session_state.reset_id
+st.divider()
+
+if f"fecha_sel_{usuario}" not in st.session_state:
+    st.session_state[f"fecha_sel_{usuario}"] = fecha_hoy()
+fecha_activa = st.session_state[f"fecha_sel_{usuario}"]
+
+# --- 4. RENDERIZADO DE LA PESTAÑA ACTIVA ---
+if pestana_activa == "🏠 Resumen":
+    render_tab_resumen(usuario, datos_perfil, fecha_activa, rid)
+elif pestana_activa == "➕ Registro":
+    render_tab_registro(usuario, peso, fecha_activa, rid, API_KEY)
+elif pestana_activa == "⏳ Ayuno":
+    render_tab_ayuno(usuario)
+elif pestana_activa == "🤖 Chat IA":
+    render_tab_chat(usuario, datos_perfil, fecha_activa, rid, API_KEY)
+elif pestana_activa == "⚙️ Perfil":
+    render_tab_perfil(usuario, datos_perfil, rid)
