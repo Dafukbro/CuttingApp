@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 import hashlib
 import hmac
 import secrets
@@ -6,8 +7,10 @@ import streamlit as st
 
 try:
     import psycopg2
+    from psycopg2 import pool as pg_pool
 except ImportError:
     psycopg2 = None
+    pg_pool = None
 
 PBKDF2_ITERATIONS = 200_000
 
@@ -41,12 +44,10 @@ def _verificar_hash(password, pwd_guardada):
             return hmac.compare_digest(esperado, pwd_guardada), False
         return False, False
 
-    # Compatibilidad con SHA-256 anterior (sin salt) -> migrar a PBKDF2
     sha256_simple = hashlib.sha256(password.encode("utf-8")).hexdigest()
     if hmac.compare_digest(pwd_guardada, sha256_simple):
         return True, True
 
-    # Compatibilidad con texto plano antiguo -> migrar a PBKDF2
     if hmac.compare_digest(pwd_guardada, password):
         return True, True
 
@@ -61,12 +62,49 @@ def _usar_postgres():
         return False
 
 
+@st.cache_resource
+def _obtener_pool_pg(url):
+    """Mantiene un pool de conexiones reutilizables hacia Supabase para evitar reconexiones SSL lentas."""
+    return pg_pool.ThreadedConnectionPool(minconn=1, maxconn=10, dsn=url, connect_timeout=10)
+
+
 def _conectar():
-    """Abre conexión a Supabase (PostgreSQL) si está configurado, o a SQLite local como respaldo."""
+    """Obtiene una conexión rápida del pool de Supabase (PostgreSQL) o de SQLite local."""
     if _usar_postgres():
         url = st.secrets["DATABASE_URL"].replace("[", "").replace("]", "")
-        return psycopg2.connect(url, connect_timeout=10), True
-    return sqlite3.connect("cutting.db", timeout=10), False
+        try:
+            pool_inst = _obtener_pool_pg(url)
+            conn = pool_inst.getconn()
+            if conn.closed:
+                pool_inst.putconn(conn, close=True)
+                conn = psycopg2.connect(url, connect_timeout=10)
+                return conn, True, None
+            return conn, True, pool_inst
+        except Exception:
+            return psycopg2.connect(url, connect_timeout=10), True, None
+    return sqlite3.connect("cutting.db", timeout=10), False, None
+
+
+@contextmanager
+def _sesion_db(commit=False):
+    """Context manager que gestiona cursores, commits y devuelve la conexión al pool de forma segura."""
+    conn, es_pg, pool_inst = _conectar()
+    try:
+        c = conn.cursor()
+        yield c, conn, es_pg
+        if commit:
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        if pool_inst is not None:
+            try:
+                pool_inst.putconn(conn)
+            except Exception:
+                conn.close()
+        else:
+            conn.close()
 
 
 def _ph(es_pg, cantidad=1):
@@ -76,10 +114,8 @@ def _ph(es_pg, cantidad=1):
 
 
 @st.cache_resource
-def init_db(_version=7):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+def init_db(_version=8):
+    with _sesion_db() as (c, conn, es_pg):
         id_tipo = "SERIAL PRIMARY KEY" if es_pg else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
         tablas = [
@@ -150,7 +186,6 @@ def init_db(_version=7):
             except Exception:
                 conn.rollback()
 
-        # Asegurar que las columnas de pregunta de seguridad existan en cuentas creadas antes
         for col_sql in [
             "ALTER TABLE usuarios ADD COLUMN pregunta_seguridad TEXT;",
             "ALTER TABLE usuarios ADD COLUMN respuesta_hash TEXT;"
@@ -161,8 +196,20 @@ def init_db(_version=7):
             except Exception:
                 conn.rollback()
 
-        # En Supabase (PostgreSQL), activar Row Level Security (RLS) en todas las tablas
-        # para bloquear el acceso público desde la API REST (PostgREST) y eliminar las alertas de vulnerabilidad.
+        # Índices para acelerar las consultas por usuario y fecha
+        indices = [
+            "CREATE INDEX IF NOT EXISTS idx_comidas_usr_fecha ON comidas (usuario, fecha);",
+            "CREATE INDEX IF NOT EXISTS idx_ejercicios_usr_fecha ON ejercicios (usuario, fecha);",
+            "CREATE INDEX IF NOT EXISTS idx_peso_usr ON historial_peso (usuario);",
+            "CREATE INDEX IF NOT EXISTS idx_hist_ayunos_usr ON historial_ayunos (usuario);"
+        ]
+        for idx_sql in indices:
+            try:
+                c.execute(idx_sql)
+                conn.commit()
+            except Exception:
+                conn.rollback()
+
         if es_pg:
             nombres_tablas = [
                 "usuarios", "perfil", "comidas", "historial_peso",
@@ -174,43 +221,32 @@ def init_db(_version=7):
                     conn.commit()
                 except Exception:
                     conn.rollback()
-    finally:
-        conn.close()
     return True
 
 
 # --- FUNCIONES DE AUTENTICACIÓN Y SEGURIDAD ---
 def crear_usuario(usuario, password, pregunta="", respuesta=""):
     """Crea un usuario con contraseña y respuesta de seguridad protegidas con PBKDF2-HMAC-SHA256 + salt."""
-    conn, es_pg = _conectar()
+    pwd_hash = _hash_password(password)
+    resp_limpia = str(respuesta or "").strip().lower()
+    resp_hash = _hash_password(resp_limpia) if resp_limpia else ""
     try:
-        c = conn.cursor()
-        p = _ph(es_pg, 4)
-        pwd_hash = _hash_password(password)
-        resp_limpia = str(respuesta or "").strip().lower()
-        resp_hash = _hash_password(resp_limpia) if resp_limpia else ""
-        try:
+        with _sesion_db(commit=True) as (c, _, es_pg):
+            p = _ph(es_pg, 4)
             c.execute(
                 f"INSERT INTO usuarios (usuario, password, pregunta_seguridad, respuesta_hash) VALUES ({p})",
                 (usuario, pwd_hash, str(pregunta or "").strip(), resp_hash)
             )
-            conn.commit()
-            return True
-        except Exception:
-            conn.rollback()
-            return False
-    finally:
-        conn.close()
+        return True
+    except Exception:
+        return False
 
 
 def verificar_usuario(usuario, password):
     """Verifica credenciales en tiempo constante y migra automáticamente hashes antiguos a PBKDF2."""
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
-        simbolo = "%s" if es_pg else "?"
-
-        c.execute(f"SELECT password FROM usuarios WHERE usuario = {simbolo}", (usuario,))
+    with _sesion_db() as (c, conn, es_pg):
+        s = "%s" if es_pg else "?"
+        c.execute(f"SELECT password FROM usuarios WHERE usuario = {s}", (usuario,))
         fila = c.fetchone()
         if not fila:
             return False
@@ -218,71 +254,49 @@ def verificar_usuario(usuario, password):
         es_valida, migrar = _verificar_hash(password, fila[0])
         if es_valida and migrar:
             nuevo_hash = _hash_password(password)
-            c.execute(f"UPDATE usuarios SET password = {simbolo} WHERE usuario = {simbolo}", (nuevo_hash, usuario))
+            c.execute(f"UPDATE usuarios SET password = {s} WHERE usuario = {s}", (nuevo_hash, usuario))
             conn.commit()
-
         return es_valida
-    finally:
-        conn.close()
 
 
 def cambiar_password(usuario, password_actual, password_nueva):
     """Cambia la contraseña verificando primero la contraseña actual del usuario."""
     if not verificar_usuario(usuario, password_actual):
         return False
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    nuevo_hash = _hash_password(password_nueva)
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
-        nuevo_hash = _hash_password(password_nueva)
         c.execute(f"UPDATE usuarios SET password = {s} WHERE usuario = {s}", (nuevo_hash, usuario))
-        conn.commit()
-        return True
-    finally:
-        conn.close()
+    return True
 
 
 def obtener_pregunta_seguridad(usuario):
-    """
-    Retorna (existe_usuario: bool, pregunta: str).
-    Si el usuario existe pero aún no configuró pregunta, pregunta será "".
-    """
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    """Retorna (existe_usuario: bool, pregunta: str)."""
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(f"SELECT pregunta_seguridad FROM usuarios WHERE usuario = {s}", (usuario,))
         fila = c.fetchone()
         if fila is None:
             return False, ""
         return True, str(fila[0] or "").strip()
-    finally:
-        conn.close()
 
 
 def guardar_pregunta_seguridad(usuario, pregunta, respuesta):
     """Guarda o actualiza la pregunta y respuesta de seguridad encriptada del usuario."""
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    resp_limpia = str(respuesta).strip().lower()
+    resp_hash = _hash_password(resp_limpia)
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
-        resp_limpia = str(respuesta).strip().lower()
-        resp_hash = _hash_password(resp_limpia)
         c.execute(
             f"UPDATE usuarios SET pregunta_seguridad = {s}, respuesta_hash = {s} WHERE usuario = {s}",
             (str(pregunta).strip(), resp_hash, usuario)
         )
-        conn.commit()
-        return True
-    finally:
-        conn.close()
+    return True
 
 
 def recuperar_password_pregunta(usuario, respuesta_ingresada, password_nueva):
     """Verifica la respuesta de seguridad y restablece la contraseña."""
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, conn, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(f"SELECT respuesta_hash FROM usuarios WHERE usuario = {s}", (usuario,))
         fila = c.fetchone()
@@ -298,43 +312,30 @@ def recuperar_password_pregunta(usuario, respuesta_ingresada, password_nueva):
         c.execute(f"UPDATE usuarios SET password = {s} WHERE usuario = {s}", (nuevo_hash, usuario))
         conn.commit()
         return True
-    finally:
-        conn.close()
 
 
 # --- FUNCIONES DEL TRACKER (CON AISLAMIENTO ESTRICTO POR USUARIO) ---
 def obtener_perfil(usuario):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
-        simbolo = "%s" if es_pg else "?"
+    with _sesion_db() as (c, _, es_pg):
+        s = "%s" if es_pg else "?"
         c.execute(
-            f"SELECT peso, altura, edad, meta_kcal, meta_prot, meta_carbs, meta_grasas FROM perfil WHERE usuario = {simbolo}",
+            f"SELECT peso, altura, edad, meta_kcal, meta_prot, meta_carbs, meta_grasas FROM perfil WHERE usuario = {s}",
             (usuario,)
         )
         return c.fetchone()
-    finally:
-        conn.close()
 
 
 def crear_perfil(usuario, peso, altura, edad, kcal, prot, carbs, grasas):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         p = _ph(es_pg, 8)
         c.execute(
             f"INSERT INTO perfil (usuario, peso, altura, edad, meta_kcal, meta_prot, meta_carbs, meta_grasas) VALUES ({p})",
             (usuario, peso, altura, edad, kcal, prot, carbs, grasas)
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def actualizar_perfil(usuario, peso, altura, edad, kcal, prot, carbs, grasas):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(
             f"""
@@ -344,94 +345,61 @@ def actualizar_perfil(usuario, peso, altura, edad, kcal, prot, carbs, grasas):
             """,
             (peso, altura, edad, kcal, prot, carbs, grasas, usuario)
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def agregar_comida(usuario, fecha_sel, nombre, kcal, prot, carbs, grasas):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         p = _ph(es_pg, 7)
         c.execute(
             f"INSERT INTO comidas (usuario, fecha, nombre, kcal, proteina, carbs, grasas) VALUES ({p})",
             (usuario, str(fecha_sel), str(nombre)[:150], int(kcal), int(prot), int(carbs), int(grasas))
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def obtener_comidas_por_fecha(usuario, fecha_sel):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(
             f"SELECT id, nombre, kcal, proteina, carbs, grasas FROM comidas WHERE usuario = {s} AND fecha = {s}",
             (usuario, str(fecha_sel))
         )
         return c.fetchall()
-    finally:
-        conn.close()
 
 
 def eliminar_comida(id_comida, usuario=None):
-    """Elimina una comida verificando que pertenezca al usuario autenticado."""
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         if usuario:
             c.execute(f"DELETE FROM comidas WHERE id = {s} AND usuario = {s}", (id_comida, usuario))
         else:
             c.execute(f"DELETE FROM comidas WHERE id = {s}", (id_comida,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def registrar_peso_diario(usuario, fecha_sel, peso_val):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         p = _ph(es_pg, 3)
         s = "%s" if es_pg else "?"
         c.execute(f"INSERT INTO historial_peso (usuario, fecha, peso) VALUES ({p})", (usuario, str(fecha_sel), peso_val))
         c.execute(f"UPDATE perfil SET peso = {s} WHERE usuario = {s}", (peso_val, usuario))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def obtener_historial_peso(usuario):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(f"SELECT fecha, peso FROM historial_peso WHERE usuario = {s} ORDER BY fecha ASC", (usuario,))
         return c.fetchall()
-    finally:
-        conn.close()
 
 
 # --- FUNCIONES DE AYUNO INTERMITENTE ---
 def obtener_ayuno(usuario):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(f"SELECT inicio_iso, horas_meta, activo FROM ayuno WHERE usuario = {s}", (usuario,))
         return c.fetchone()
-    finally:
-        conn.close()
 
 
 def iniciar_ayuno(usuario, inicio_iso, horas_meta):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         p = _ph(es_pg, 4)
         c.execute(f"SELECT usuario FROM ayuno WHERE usuario = {s}", (usuario,))
@@ -445,15 +413,10 @@ def iniciar_ayuno(usuario, inicio_iso, horas_meta):
                 f"INSERT INTO ayuno (usuario, inicio_iso, horas_meta, activo) VALUES ({p})",
                 (usuario, inicio_iso, int(horas_meta), 1)
             )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def detener_ayuno(usuario, fecha_sel, protocolo, horas_completadas, horas_meta):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         p = _ph(es_pg, 5)
         c.execute(f"UPDATE ayuno SET activo = 0 WHERE usuario = {s}", (usuario,))
@@ -462,59 +425,37 @@ def detener_ayuno(usuario, fecha_sel, protocolo, horas_completadas, horas_meta):
                 f"INSERT INTO historial_ayunos (usuario, fecha, protocolo, horas_completadas, horas_meta) VALUES ({p})",
                 (usuario, str(fecha_sel), protocolo, round(float(horas_completadas), 2), int(horas_meta))
             )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def obtener_historial_ayunos(usuario):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(
             f"SELECT id, fecha, protocolo, horas_completadas, horas_meta FROM historial_ayunos WHERE usuario = {s} ORDER BY id DESC LIMIT 10",
             (usuario,)
         )
         return c.fetchall()
-    finally:
-        conn.close()
 
 
 def cancelar_ayuno(usuario):
-    """Descarta el ayuno en curso sin guardarlo en el historial."""
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(f"UPDATE ayuno SET activo = 0 WHERE usuario = {s}", (usuario,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def eliminar_historial_ayuno(id_ayuno, usuario=None):
-    """Elimina un registro del historial de ayunos verificando propiedad del usuario."""
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         if usuario:
             c.execute(f"DELETE FROM historial_ayunos WHERE id = {s} AND usuario = {s}", (id_ayuno, usuario))
         else:
             c.execute(f"DELETE FROM historial_ayunos WHERE id = {s}", (id_ayuno,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def obtener_resumen_dias(usuario, fechas_lista):
-    """Obtiene calorías y proteínas totales por día para una lista de fechas (Resumen semanal)."""
     if not fechas_lista:
         return {}
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         placeholders = _ph(es_pg, len(fechas_lista))
         parametros = [usuario] + [str(f) for f in fechas_lista]
@@ -530,61 +471,41 @@ def obtener_resumen_dias(usuario, fechas_lista):
         )
         filas = c.fetchall()
         return {fila[0]: (int(fila[1] or 0), int(fila[2] or 0)) for fila in filas}
-    finally:
-        conn.close()
 
 
 # --- FUNCIONES DE EJERCICIO Y GASTO CALÓRICO ---
 def agregar_ejercicio(usuario, fecha_sel, nombre, duracion_min, kcal_quemadas):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         p = _ph(es_pg, 5)
         c.execute(
             f"INSERT INTO ejercicios (usuario, fecha, nombre, duracion_min, kcal_quemadas) VALUES ({p})",
             (usuario, str(fecha_sel), str(nombre)[:150], int(duracion_min), int(kcal_quemadas))
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def obtener_ejercicios_por_fecha(usuario, fecha_sel):
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         c.execute(
             f"SELECT id, nombre, duracion_min, kcal_quemadas FROM ejercicios WHERE usuario = {s} AND fecha = {s}",
             (usuario, str(fecha_sel))
         )
         return c.fetchall()
-    finally:
-        conn.close()
 
 
 def eliminar_ejercicio(id_ejercicio, usuario=None):
-    """Elimina un registro de ejercicio verificando que pertenezca al usuario autenticado."""
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db(commit=True) as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         if usuario:
             c.execute(f"DELETE FROM ejercicios WHERE id = {s} AND usuario = {s}", (id_ejercicio, usuario))
         else:
             c.execute(f"DELETE FROM ejercicios WHERE id = {s}", (id_ejercicio,))
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def obtener_kcal_quemadas_dias(usuario, fechas_lista):
-    """Obtiene el total de calorías quemadas por ejercicio por día para una lista de fechas."""
     if not fechas_lista:
         return {}
-    conn, es_pg = _conectar()
-    try:
-        c = conn.cursor()
+    with _sesion_db() as (c, _, es_pg):
         s = "%s" if es_pg else "?"
         placeholders = _ph(es_pg, len(fechas_lista))
         parametros = [usuario] + [str(f) for f in fechas_lista]
@@ -599,5 +520,3 @@ def obtener_kcal_quemadas_dias(usuario, fechas_lista):
         )
         filas = c.fetchall()
         return {fila[0]: int(fila[1] or 0) for fila in filas}
-    finally:
-        conn.close()

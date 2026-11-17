@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from functools import lru_cache
 import json
 from google import genai
 from google.genai import types
@@ -7,10 +8,22 @@ from PIL import Image
 MODELO_IA = "gemini-4-hydrogen"
 MODELO_RESPALDO_RAPIDO = "gemini-3.8-flash"
 
-CONFIG_RAPIDA = types.GenerateContentConfig(
+CONFIG_JSON_RAPIDA = types.GenerateContentConfig(
     thinking_config=types.ThinkingConfig(thinking_budget=0),
-    temperature=0.2,
+    temperature=0.1,
+    response_mime_type="application/json",
 )
+
+CONFIG_CHAT_RAPIDA = types.GenerateContentConfig(
+    thinking_config=types.ThinkingConfig(thinking_budget=0),
+    temperature=0.3,
+)
+
+
+@lru_cache(maxsize=2)
+def _obtener_cliente(api_key):
+    """Reutiliza el cliente HTTP hacia Gemini para ahorrar tiempo de conexión en cada llamada."""
+    return genai.Client(api_key=api_key, http_options={"retry_options": {"attempts": 1}})
 
 
 def _limpiar_json(texto):
@@ -23,19 +36,19 @@ def _limpiar_json(texto):
     return json.loads(limpio)
 
 
-def _generar_rapido(api_key, contents, timeout_seg=4.5):
+def _generar_rapido(api_key, contents, timeout_seg=4.0):
     """
     Intenta primero con gemini-4-hydrogen (sin latencia de pensamiento).
     Si el servidor de Hydrogen presenta alta demanda (503) o tarda más de timeout_seg,
     responde al instante con el modelo rápido de respaldo para no hacer esperar al usuario.
     """
-    client = genai.Client(api_key=api_key, http_options={"retry_options": {"attempts": 1}})
+    client = _obtener_cliente(api_key)
 
     def _llamar_hydrogen():
         return client.models.generate_content(
             model=MODELO_IA,
             contents=contents,
-            config=CONFIG_RAPIDA
+            config=CONFIG_JSON_RAPIDA
         )
 
     executor = ThreadPoolExecutor(max_workers=1)
@@ -49,7 +62,7 @@ def _generar_rapido(api_key, contents, timeout_seg=4.5):
         resp_fallback = client.models.generate_content(
             model=MODELO_RESPALDO_RAPIDO,
             contents=contents,
-            config=CONFIG_RAPIDA
+            config=CONFIG_JSON_RAPIDA
         )
         return resp_fallback.text
 
@@ -64,13 +77,13 @@ def calcular_macros_texto(texto_comida, api_key):
     Devuelve ÚNICAMENTE un JSON válido con números enteros:
     {{"nombre": "Nombre del plato (ingredientes clave)", "kcal": 0, "proteina": 0, "carbs": 0, "grasas": 0}}
     """
-    texto_resp = _generar_rapido(api_key, prompt_calculo, timeout_seg=4.5)
+    texto_resp = _generar_rapido(api_key, prompt_calculo, timeout_seg=4.0)
     return _limpiar_json(texto_resp)
 
 
 def consultar_asistente_stream(pregunta, contexto_macros, api_key, historial_chat=None):
     """Envía la consulta junto con el contexto completo y el historial de la sesión actual."""
-    client = genai.Client(api_key=api_key, http_options={"retry_options": {"attempts": 1}})
+    client = _obtener_cliente(api_key)
 
     texto_historial = "Sin mensajes previos en esta sesión."
     if historial_chat:
@@ -98,7 +111,7 @@ def consultar_asistente_stream(pregunta, contexto_macros, api_key, historial_cha
         respuesta = client.models.generate_content_stream(
             model=MODELO_IA,
             contents=prompt_completo,
-            config=CONFIG_RAPIDA
+            config=CONFIG_CHAT_RAPIDA
         )
         for fragmento in respuesta:
             if fragmento.text:
@@ -107,7 +120,7 @@ def consultar_asistente_stream(pregunta, contexto_macros, api_key, historial_cha
         respuesta_fb = client.models.generate_content_stream(
             model=MODELO_RESPALDO_RAPIDO,
             contents=prompt_completo,
-            config=CONFIG_RAPIDA
+            config=CONFIG_CHAT_RAPIDA
         )
         for fragmento in respuesta_fb:
             if fragmento.text:
@@ -126,7 +139,7 @@ def calcular_macros_imagen(imagen_archivo, api_key):
     Devuelve ÚNICAMENTE un JSON válido con números enteros:
     {"nombre": "Nombre del plato (ingredientes detectados)", "kcal": 0, "proteina": 0, "carbs": 0, "grasas": 0}
     """
-    texto_resp = _generar_rapido(api_key, [prompt, img], timeout_seg=6.5)
+    texto_resp = _generar_rapido(api_key, [prompt, img], timeout_seg=6.0)
     return _limpiar_json(texto_resp)
 
 
@@ -149,5 +162,5 @@ def calcular_gasto_ejercicio(texto_ejercicio, peso_kg, api_key):
     Devuelve ÚNICAMENTE un JSON válido con números enteros:
     {{"nombre": "Resumen corto del entrenamiento", "duracion_min": 0, "kcal_quemadas": 0}}
     """
-    texto_resp = _generar_rapido(api_key, prompt, timeout_seg=4.5)
+    texto_resp = _generar_rapido(api_key, prompt, timeout_seg=4.0)
     return _limpiar_json(texto_resp)

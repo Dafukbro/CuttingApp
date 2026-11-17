@@ -6,9 +6,9 @@ import streamlit as st
 import database as db
 import ai_helper as ai
 
-if not hasattr(db, "recuperar_password_pregunta"):
+if not hasattr(db, "_sesion_db"):
     importlib.reload(db)
-if not hasattr(ai, "_generar_rapido"):
+if not hasattr(ai, "_obtener_cliente"):
     importlib.reload(ai)
 
 ZONA_HORARIA = timezone(timedelta(hours=-5))
@@ -58,6 +58,17 @@ def calcular_macros_objetivo(peso_kg, altura_val, edad_val, objetivo_key, activi
     return meta_kcal, meta_prot, meta_carbs, meta_grasas, round(altura_cm, 1)
 
 
+def _confirmar_y_redirigir(mensaje):
+    """Muestra confirmación visual en pantalla, limpia los campos y redirige a la pestaña de Resumen."""
+    st.toast(mensaje)
+    st.success(f"{mensaje} — Redirigiendo al Resumen...")
+    st.session_state.reset_id += 1
+    st.session_state.ir_a_resumen = True
+    st.session_state.mensaje_exito = mensaje
+    time.sleep(1.3)
+    st.rerun()
+
+
 PREGUNTAS_SEGURIDAD = [
     "¿Cuál era el nombre de tu primera mascota?",
     "¿En qué ciudad o barrio creciste?",
@@ -87,7 +98,7 @@ PREGUNTAS_SEGURIDAD = [
 ]
 
 st.set_page_config(page_title="Tracker Fitness & Cutting", page_icon="🔥", layout="centered")
-db.init_db(7)
+db.init_db(8)
 
 API_KEY = st.secrets["API_KEY"]
 
@@ -266,7 +277,7 @@ else:
             st.session_state.clear()
             st.rerun()
 
-    # --- NAVEGACIÓN CONTROLADA POR ESTADO (limpia inputs al cambiar de pestaña y permite redirigir a Resumen) ---
+    # --- NAVEGACIÓN CONTROLADA POR ESTADO ---
     PESTANAS = ["🏠 Resumen", "➕ Registro", "⏳ Ayuno", "🤖 Chat IA", "⚙️ Perfil"]
     nav_key = f"nav_principal_{usuario}"
 
@@ -275,7 +286,6 @@ else:
     if "pestana_anterior" not in st.session_state:
         st.session_state.pestana_anterior = "🏠 Resumen"
 
-    # Si se acaba de registrar una comida o ejercicio, redirigir automáticamente a 🏠 Resumen
     if st.session_state.get("ir_a_resumen", False):
         st.session_state[nav_key] = "🏠 Resumen"
         st.session_state.pestana_anterior = "🏠 Resumen"
@@ -289,7 +299,6 @@ else:
         key=nav_key
     )
 
-    # Si el usuario cambia de pestaña manualmente, limpiar todos los campos de texto pendientes
     if pestana_activa != st.session_state.pestana_anterior:
         st.session_state.pestana_anterior = pestana_activa
         st.session_state.reset_id += 1
@@ -297,39 +306,9 @@ else:
     rid = st.session_state.reset_id
     st.divider()
 
-    # Datos compartidos del día activo
     if f"fecha_sel_{usuario}" not in st.session_state:
         st.session_state[f"fecha_sel_{usuario}"] = fecha_hoy()
     fecha_activa = st.session_state[f"fecha_sel_{usuario}"]
-
-    comidas_hoy = db.obtener_comidas_por_fecha(usuario, fecha_activa)
-    ejercicios_hoy = db.obtener_ejercicios_por_fecha(usuario, fecha_activa)
-    datos_ayuno = db.obtener_ayuno(usuario)
-    ayuno_activo = bool(datos_ayuno and datos_ayuno[2] == 1)
-
-    kcal_hoy = sum(x[2] for x in comidas_hoy)
-    prot_hoy = sum(x[3] for x in comidas_hoy)
-    carbs_hoy = sum(x[4] for x in comidas_hoy)
-    grasas_hoy = sum(x[5] for x in comidas_hoy)
-    kcal_quemadas_hoy = sum(x[3] for x in ejercicios_hoy)
-
-    meta_kcal_ajustada = meta_kcal + kcal_quemadas_hoy
-    kcal_netas = kcal_hoy - kcal_quemadas_hoy
-    kcal_restantes = meta_kcal_ajustada - kcal_hoy
-    prot_restante = meta_prot - prot_hoy
-    carbs_restantes = meta_carbs - carbs_hoy
-    grasas_restantes = meta_grasas - grasas_hoy
-
-    # Cálculo de horas de ayuno si está activo (para pestaña Ayuno y contexto de Chat IA)
-    h_trans, m_trans, horas_meta = 0, 0, 16
-    if ayuno_activo:
-        inicio_iso, horas_meta, _ = datos_ayuno
-        inicio_dt = datetime.fromisoformat(inicio_iso)
-        if inicio_dt.tzinfo is None:
-            inicio_dt = inicio_dt.replace(tzinfo=ZONA_HORARIA)
-        segundos_transcurridos = max((ahora_local() - inicio_dt).total_seconds(), 0)
-        h_trans = int(segundos_transcurridos // 3600)
-        m_trans = int((segundos_transcurridos % 3600) // 60)
 
     # --- PESTAÑA 1: RESUMEN DEL DÍA ---
     if pestana_activa == "🏠 Resumen":
@@ -341,6 +320,21 @@ else:
         if nueva_fecha != fecha_activa:
             st.session_state[f"fecha_sel_{usuario}"] = nueva_fecha
             st.rerun()
+
+        comidas_hoy = db.obtener_comidas_por_fecha(usuario, fecha_activa)
+        ejercicios_hoy = db.obtener_ejercicios_por_fecha(usuario, fecha_activa)
+
+        kcal_hoy = sum(x[2] for x in comidas_hoy)
+        prot_hoy = sum(x[3] for x in comidas_hoy)
+        carbs_hoy = sum(x[4] for x in comidas_hoy)
+        grasas_hoy = sum(x[5] for x in comidas_hoy)
+        kcal_quemadas_hoy = sum(x[3] for x in ejercicios_hoy)
+
+        meta_kcal_ajustada = meta_kcal + kcal_quemadas_hoy
+        kcal_restantes = meta_kcal_ajustada - kcal_hoy
+        prot_restante = meta_prot - prot_hoy
+        carbs_restantes = meta_carbs - carbs_hoy
+        grasas_restantes = meta_grasas - grasas_hoy
 
         with st.container(border=True):
             st.caption("🔥 **RESUMEN DE CALORÍAS DEL DÍA**")
@@ -423,7 +417,8 @@ else:
                     if v[0] <= (meta_kcal + quemadas_7d.get(f_key, 0) + 100)
                 )
 
-                mantenimiento_est = meta_kcal + 400
+                alt_cm_sem = float(altura) * 100.0 if float(altura) < 3.0 else float(altura)
+                mantenimiento_est = int(((10.0 * float(peso)) + (6.25 * alt_cm_sem) - (5.0 * int(edad)) + 5.0) * 1.55)
                 deficit_acumulado = sum(
                     (mantenimiento_est + quemadas_7d.get(f_key, 0) - v[0])
                     for f_key, v in resumen_7d.items()
@@ -450,7 +445,7 @@ else:
             if historial:
                 st.line_chart({fila[0]: fila[1] for fila in historial[-14:]})
 
-    # --- PESTAÑA 2: REGISTRO (Limpia inputs y redirige automáticamente a 🏠 Resumen al guardar) ---
+    # --- PESTAÑA 2: REGISTRO (Muestra confirmación, limpia inputs y redirige a 🏠 Resumen) ---
     elif pestana_activa == "➕ Registro":
         st.caption(f"📅 Registrando para el día: **{fecha_activa}**")
 
@@ -464,13 +459,10 @@ else:
                         try:
                             datos = ai.calcular_macros_texto(comida_ia, API_KEY)
                             db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
-                            st.session_state.reset_id += 1
-                            st.session_state.ir_a_resumen = True
-                            st.session_state.mensaje_exito = (
+                            _confirmar_y_redirigir(
                                 f"✅ Comida registrada: **{datos['nombre']}** — "
                                 f"🔥 {datos['kcal']} kcal ｜ 🥩 {datos['proteina']}g P ｜ 🍚 {datos['carbs']}g C ｜ 🥑 {datos['grasas']}g G"
                             )
-                            st.rerun()
                         except Exception as e:
                             st.error(f"Error: {e}")
 
@@ -481,13 +473,10 @@ else:
                     try:
                         datos = ai.calcular_macros_imagen(foto_plato, API_KEY)
                         db.agregar_comida(usuario, fecha_activa, datos["nombre"], datos["kcal"], datos["proteina"], datos["carbs"], datos["grasas"])
-                        st.session_state.reset_id += 1
-                        st.session_state.ir_a_resumen = True
-                        st.session_state.mensaje_exito = (
+                        _confirmar_y_redirigir(
                             f"✅ Foto registrada: **{datos['nombre']}** — "
                             f"🔥 {datos['kcal']} kcal ｜ 🥩 {datos['proteina']}g P ｜ 🍚 {datos['carbs']}g C ｜ 🥑 {datos['grasas']}g G"
                         )
-                        st.rerun()
                     except Exception as e:
                         st.error(f"Fallo en servidor de IA, intenta más tarde. Detalle: {e}")
 
@@ -504,10 +493,7 @@ else:
                 if nom_manual:
                     kcal_final = int(kcal_man) if kcal_man > 0 else int((prot_man * 4) + (carbs_man * 4) + (grasas_man * 9))
                     db.agregar_comida(usuario, fecha_activa, nom_manual, kcal_final, int(prot_man), int(carbs_man), int(grasas_man))
-                    st.session_state.reset_id += 1
-                    st.session_state.ir_a_resumen = True
-                    st.session_state.mensaje_exito = f"✅ Guardado manual: **{nom_manual}** ({kcal_final} kcal)"
-                    st.rerun()
+                    _confirmar_y_redirigir(f"✅ Guardado manual: **{nom_manual}** ({kcal_final} kcal)")
                 else:
                     st.warning("Escribe el nombre del alimento para guardarlo.")
 
@@ -526,10 +512,7 @@ else:
                             usuario, fecha_activa,
                             datos_ej["nombre"], datos_ej["duracion_min"], datos_ej["kcal_quemadas"]
                         )
-                        st.session_state.reset_id += 1
-                        st.session_state.ir_a_resumen = True
-                        st.session_state.mensaje_exito = f"🏃 Ejercicio registrado: **{datos_ej['nombre']}** (-{datos_ej['kcal_quemadas']} kcal)"
-                        st.rerun()
+                        _confirmar_y_redirigir(f"🏃 Ejercicio registrado: **{datos_ej['nombre']}** (-{datos_ej['kcal_quemadas']} kcal)")
                     except Exception as e:
                         st.error(f"Error al calcular ejercicio: {e}")
 
@@ -542,16 +525,15 @@ else:
             if st.button("➕ Guardar ejercicio manual", use_container_width=True, key=f"btn_ej_man_{usuario}"):
                 if nom_ej_man:
                     db.agregar_ejercicio(usuario, fecha_activa, nom_ej_man, int(dur_ej_man), int(kcal_ej_man))
-                    st.session_state.reset_id += 1
-                    st.session_state.ir_a_resumen = True
-                    st.session_state.mensaje_exito = f"🏃 Ejercicio registrado: **{nom_ej_man}** (-{kcal_ej_man} kcal)"
-                    st.rerun()
+                    _confirmar_y_redirigir(f"🏃 Ejercicio registrado: **{nom_ej_man}** (-{kcal_ej_man} kcal)")
                 else:
                     st.warning("Escribe el nombre de la actividad.")
 
     # --- PESTAÑA 3: AYUNO INTERMITENTE ---
     elif pestana_activa == "⏳ Ayuno":
         st.subheader("⏳ Ayuno Intermitente")
+        datos_ayuno = db.obtener_ayuno(usuario)
+        ayuno_activo = bool(datos_ayuno and datos_ayuno[2] == 1)
 
         if not ayuno_activo:
             st.caption("🟢 **Estado actual:** En ventana de alimentación (sin ayuno activo)")
@@ -620,6 +602,8 @@ else:
             progreso = min(segundos_transcurridos / max(segundos_meta, 1), 1.0)
             porcentaje = int(progreso * 100)
 
+            h_trans = int(segundos_transcurridos // 3600)
+            m_trans = int((segundos_transcurridos % 3600) // 60)
             segundos_restantes = max(segundos_meta - segundos_transcurridos, 0)
             h_rest = int(segundos_restantes // 3600)
             m_rest = int((segundos_restantes % 3600) // 60)
@@ -719,6 +703,30 @@ else:
         pregunta = pregunta_rapida or pregunta_input
 
         if pregunta:
+            comidas_hoy = db.obtener_comidas_por_fecha(usuario, fecha_activa)
+            ejercicios_hoy = db.obtener_ejercicios_por_fecha(usuario, fecha_activa)
+            datos_ayuno = db.obtener_ayuno(usuario)
+            ayuno_activo = bool(datos_ayuno and datos_ayuno[2] == 1)
+
+            kcal_hoy = sum(x[2] for x in comidas_hoy)
+            prot_hoy = sum(x[3] for x in comidas_hoy)
+            carbs_hoy = sum(x[4] for x in comidas_hoy)
+            grasas_hoy = sum(x[5] for x in comidas_hoy)
+            kcal_quemadas_hoy = sum(x[3] for x in ejercicios_hoy)
+            kcal_restantes = (meta_kcal + kcal_quemadas_hoy) - kcal_hoy
+            prot_restante = meta_prot - prot_hoy
+            carbs_restantes = meta_carbs - carbs_hoy
+            grasas_restantes = meta_grasas - grasas_hoy
+
+            estado_ayuno_str = "No está en ayuno actualmente."
+            if ayuno_activo:
+                inicio_iso, horas_meta, _ = datos_ayuno
+                inicio_dt = datetime.fromisoformat(inicio_iso)
+                if inicio_dt.tzinfo is None:
+                    inicio_dt = inicio_dt.replace(tzinfo=ZONA_HORARIA)
+                seg_t = max((ahora_local() - inicio_dt).total_seconds(), 0)
+                estado_ayuno_str = f"En ayuno activo ({int(seg_t // 3600)}h {int((seg_t % 3600) // 60)}m de {horas_meta}h)."
+
             st.session_state.mensajes.append({"rol": "user", "texto": pregunta})
             with contenedor_chat:
                 with st.chat_message("user"):
@@ -726,9 +734,6 @@ else:
 
                 lista_comidas_str = ", ".join([f"{nom} ({k} kcal, {p}g P, {c}g C, {g}g G)" for _, nom, k, p, c, g in comidas_hoy]) if comidas_hoy else "Ninguna hoy."
                 lista_ej_str = ", ".join([f"{nom_e} ({dur_e} min, -{kcal_e} kcal)" for _, nom_e, dur_e, kcal_e in ejercicios_hoy]) if ejercicios_hoy else "Ninguno registrado hoy."
-                estado_ayuno_str = "No está en ayuno actualmente."
-                if ayuno_activo:
-                    estado_ayuno_str = f"En ayuno activo ({h_trans}h {m_trans}m completadas de una meta de {horas_meta}h)."
 
                 alt_cm_ctx = float(altura) * 100.0 if float(altura) < 3.0 else float(altura)
                 mant_aprox = int(((10.0 * float(peso)) + (6.25 * alt_cm_ctx) - (5.0 * int(edad)) + 5.0) * 1.55)
@@ -787,10 +792,7 @@ else:
 
             if st.button("✨ Aplicar nuevas metas recomendadas", type="primary", use_container_width=True, key=f"btn_recalc_{usuario}"):
                 db.actualizar_perfil(usuario, peso_calc, a_cm_final, int(edad_calc), k_sug, p_sug, c_sug, g_sug)
-                st.session_state.reset_id += 1
-                st.session_state.ir_a_resumen = True
-                st.session_state.mensaje_exito = f"🎯 Nuevas metas aplicadas: {k_sug} kcal ｜ {p_sug}g P ｜ {c_sug}g C ｜ {g_sug}g G"
-                st.rerun()
+                _confirmar_y_redirigir(f"🎯 Nuevas metas aplicadas: {k_sug} kcal ｜ {p_sug}g P ｜ {c_sug}g C ｜ {g_sug}g G")
 
         with st.expander("🎛️ Ajuste Manual de Macros", expanded=False):
             st.caption("Si prefieres fijar tus calorías y gramos de cada macronutriente manualmente:")
@@ -802,10 +804,7 @@ else:
 
             if st.button("Guardar Ajuste Manual", use_container_width=True, key=f"btn_perfil_{usuario}"):
                 db.actualizar_perfil(usuario, nuevo_peso, altura, edad, nueva_kcal, nueva_prot, nuevos_carbs, nuevas_grasas)
-                st.session_state.reset_id += 1
-                st.session_state.ir_a_resumen = True
-                st.session_state.mensaje_exito = "✅ Perfil actualizado manualmente."
-                st.rerun()
+                _confirmar_y_redirigir("✅ Perfil actualizado manualmente.")
 
         _, pregunta_actual_usr = db.obtener_pregunta_seguridad(usuario)
         with st.expander("🛡️ Pregunta de Seguridad (Recuperación de Contraseña)", expanded=not bool(pregunta_actual_usr)):
