@@ -5,9 +5,8 @@ import time
 import streamlit as st
 import database as db
 import ai_helper as ai
-import email_helper as eh
 
-if not hasattr(db, "existe_usuario"):
+if not hasattr(db, "agregar_ejercicio"):
     importlib.reload(db)
 if not hasattr(ai, "calcular_gasto_ejercicio"):
     importlib.reload(ai)
@@ -55,7 +54,7 @@ def calcular_macros_objetivo(peso_kg, altura_val, edad_val, objetivo_key, activi
     return meta_kcal, meta_prot, meta_carbs, meta_grasas, round(altura_cm, 1)
 
 st.set_page_config(page_title="Tracker Cutting", page_icon="🔥", layout="centered")
-db.init_db(6)
+db.init_db(5)
 
 API_KEY = st.secrets["API_KEY"]
 
@@ -66,12 +65,10 @@ if "intentos_fallidos" not in st.session_state:
     st.session_state.intentos_fallidos = 0
 if "bloqueo_hasta" not in st.session_state:
     st.session_state.bloqueo_hasta = 0.0
-if "usuario_recuperacion" not in st.session_state:
-    st.session_state.usuario_recuperacion = ""
 
 if not st.session_state.usuario:
     st.title("🔐 Acceso a Cutting Tracker")
-    tab_login, tab_registro, tab_recuperar = st.tabs(["Iniciar Sesión", "Registrarse", "🔑 Recuperar Contraseña"])
+    tab_login, tab_registro = st.tabs(["Iniciar Sesión", "Registrarse"])
 
     with tab_login:
         tiempo_restante_bloqueo = int(st.session_state.bloqueo_hasta - time.time())
@@ -118,61 +115,6 @@ if not st.session_state.usuario:
                     st.success("¡Cuenta creada con éxito! Ahora puedes iniciar sesión.")
                 else:
                     st.error("Ese nombre de usuario ya existe.")
-
-    with tab_recuperar:
-        st.caption("Ingresa tu usuario y tu correo electrónico para recibir un código de verificación de 6 dígitos.")
-        with st.container(border=True):
-            st.markdown("##### 1️⃣ Solicitar código de verificación")
-            user_rec = st.text_input("Nombre de usuario", value=st.session_state.usuario_recuperacion, max_chars=30, key="rec_user_input").strip()
-            email_rec = st.text_input("Correo electrónico donde recibirás el código", max_chars=100, placeholder="tucorreo@gmail.com", key="rec_email_input").strip().lower()
-            if st.button("📩 Enviar código de 6 dígitos", use_container_width=True, key="btn_enviar_cod"):
-                if not user_rec or not email_rec:
-                    st.warning("Escribe tu nombre de usuario y tu correo electrónico.")
-                elif not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email_rec):
-                    st.error("Ingresa un correo electrónico válido.")
-                elif not db.existe_usuario(user_rec):
-                    st.error("No existe ninguna cuenta con ese nombre de usuario.")
-                else:
-                    email_guardado = db.obtener_email_usuario(user_rec)
-                    if email_guardado and email_guardado.lower() != email_rec:
-                        st.error("El correo ingresado no coincide con el correo vinculado a este usuario.")
-                    else:
-                        with st.spinner("Enviando código a tu correo..."):
-                            codigo_6 = db.generar_codigo_recuperacion(user_rec)
-                            smtp_usr = st.secrets.get("SMTP_EMAIL", "")
-                            smtp_pwd = st.secrets.get("SMTP_PASSWORD", "")
-                            enviado, msg_envio = eh.enviar_codigo_email(email_rec, user_rec, codigo_6, smtp_usr, smtp_pwd)
-                            if enviado:
-                                st.session_state.usuario_recuperacion = user_rec
-                                st.session_state.email_recuperacion = email_rec
-                                st.success(f"✅ Enviamos un código de 6 dígitos a **{email_rec}** (válido por 10 minutos).")
-                            else:
-                                st.error(msg_envio)
-
-        with st.container(border=True):
-            st.markdown("##### 2️⃣ Ingresar código y nueva contraseña")
-            cod_input = st.text_input("Código de 6 dígitos recibido en tu correo", max_chars=6, placeholder="123456", key="rec_cod_input").strip()
-            nueva_pwd_rec = st.text_input("Nueva Contraseña (mínimo 6 caracteres)", type="password", max_chars=128, key="rec_new_pwd")
-            conf_pwd_rec = st.text_input("Confirmar Nueva Contraseña", type="password", max_chars=128, key="rec_conf_pwd")
-            if st.button("✅ Restablecer Contraseña", type="primary", use_container_width=True, key="btn_reset_pwd"):
-                usuario_objetivo = user_rec or st.session_state.usuario_recuperacion
-                email_objetivo = email_rec or st.session_state.get("email_recuperacion", "")
-                if not usuario_objetivo or not cod_input or not nueva_pwd_rec or not conf_pwd_rec:
-                    st.warning("Completa tu usuario, el código de 6 dígitos y la nueva contraseña.")
-                elif len(nueva_pwd_rec) < 6:
-                    st.error("La nueva contraseña debe tener al menos 6 caracteres.")
-                elif nueva_pwd_rec != conf_pwd_rec:
-                    st.error("Las contraseñas no coinciden.")
-                else:
-                    exito_rec, msg_rec = db.verificar_codigo_y_restablecer(usuario_objetivo, cod_input, nueva_pwd_rec)
-                    if exito_rec:
-                        if email_objetivo:
-                            db.actualizar_email_usuario(usuario_objetivo, email_objetivo)
-                        st.session_state.usuario_recuperacion = ""
-                        st.session_state.email_recuperacion = ""
-                        st.success(msg_rec)
-                    else:
-                        st.error(msg_rec)
     st.stop()
 
 usuario = st.session_state.usuario
