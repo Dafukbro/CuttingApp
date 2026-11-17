@@ -187,28 +187,35 @@ else:
         grasas_restantes = meta_grasas - grasas_hoy
 
         with st.container(border=True):
-            st.markdown(
-                f"🔥 **Balance del día:** {kcal_hoy} consumidas − {kcal_quemadas_hoy} quemadas = "
-                f"**{kcal_netas} kcal netas** (Meta base: {meta_kcal} kcal)"
+            st.caption("🔥 **RESUMEN DE CALORÍAS DEL DÍA**")
+            c_kcal1, c_kcal2, c_kcal3, c_kcal4 = st.columns(4)
+            c_kcal1.metric("🎯 Meta Base", f"{meta_kcal}", "kcal")
+            c_kcal2.metric("🍽️ Comidas", f"{kcal_hoy}", "kcal consumidas")
+            c_kcal3.metric(
+                "🏃 Ejercicio",
+                f"{kcal_quemadas_hoy}",
+                delta=f"+{kcal_quemadas_hoy} kcal extra" if kcal_quemadas_hoy > 0 else "0 kcal",
+                delta_color="normal" if kcal_quemadas_hoy > 0 else "off"
+            )
+            c_kcal4.metric(
+                "🔥 Restantes",
+                f"{kcal_restantes}",
+                delta="Disponibles" if kcal_restantes >= 0 else f"Exceso ({abs(kcal_restantes)})",
+                delta_color="normal" if kcal_restantes >= 0 else "inverse"
             )
             st.progress(min(max(kcal_hoy, 0) / max(meta_kcal_ajustada, 1), 1.0))
 
-            col1, col2, col3, col4 = st.columns(4)
-            with col1:
-                st.metric(
-                    "Kcal Restantes",
-                    f"{kcal_restantes}",
-                    delta=f"+{kcal_quemadas_hoy} por ejercicio" if kcal_quemadas_hoy > 0 and kcal_restantes >= 0 else ("En meta" if kcal_restantes >= 0 else f"Exceso ({abs(kcal_restantes)})"),
-                    delta_color="normal" if kcal_restantes >= 0 else "inverse"
-                )
-            with col2:
-                st.metric("🥩 Proteína", f"{prot_hoy}g / {meta_prot}g", f"Faltan {max(prot_restante, 0)}g" if prot_restante > 0 else "¡Meta lograda!")
+            st.divider()
+            st.caption("📊 **MACRONUTRIENTES DEL DÍA**")
+            col_m1, col_m2, col_m3 = st.columns(3)
+            with col_m1:
+                st.metric("🥩 Proteína", f"{prot_hoy} / {meta_prot}g", f"Faltan {max(prot_restante, 0)}g" if prot_restante > 0 else "¡Meta lograda!")
                 st.progress(min(prot_hoy / max(meta_prot, 1), 1.0))
-            with col3:
-                st.metric("🍚 Carbs", f"{carbs_hoy}g / {meta_carbs}g", f"Restan {carbs_restantes}g" if carbs_restantes >= 0 else f"+{abs(carbs_restantes)}g")
+            with col_m2:
+                st.metric("🍚 Carbohidratos", f"{carbs_hoy} / {meta_carbs}g", f"Restan {carbs_restantes}g" if carbs_restantes >= 0 else f"+{abs(carbs_restantes)}g")
                 st.progress(min(carbs_hoy / max(meta_carbs, 1), 1.0))
-            with col4:
-                st.metric("🥑 Grasas", f"{grasas_hoy}g / {meta_grasas}g", f"Restan {grasas_restantes}g" if grasas_restantes >= 0 else f"+{abs(grasas_restantes)}g")
+            with col_m3:
+                st.metric("🥑 Grasas", f"{grasas_hoy} / {meta_grasas}g", f"Restan {grasas_restantes}g" if grasas_restantes >= 0 else f"+{abs(grasas_restantes)}g")
                 st.progress(min(grasas_hoy / max(meta_grasas, 1), 1.0))
         
         with st.expander(f"📋 Consumido hoy ({len(comidas_hoy)} comidas — {kcal_hoy} kcal)", expanded=True):
