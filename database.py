@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import secrets
 import sqlite3
+import time
 import streamlit as st
 
 try:
@@ -76,7 +77,7 @@ def _ph(es_pg, cantidad=1):
 
 
 @st.cache_resource
-def init_db(_version=5):
+def init_db(_version=6):
     conn, es_pg = _conectar()
     try:
         c = conn.cursor()
@@ -86,7 +87,8 @@ def init_db(_version=5):
             """
             CREATE TABLE IF NOT EXISTS usuarios (
                 usuario TEXT PRIMARY KEY,
-                password TEXT
+                password TEXT,
+                email TEXT
             )
             """,
             """
@@ -138,6 +140,14 @@ def init_db(_version=5):
                 duracion_min INTEGER,
                 kcal_quemadas INTEGER
             )
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS recuperacion_password (
+                usuario TEXT PRIMARY KEY,
+                codigo_hash TEXT,
+                expira_ts REAL,
+                intentos INTEGER
+            )
             """
         ]
 
@@ -148,12 +158,19 @@ def init_db(_version=5):
             except Exception:
                 conn.rollback()
 
+        # Asegurar que la columna email exista en tablas usuarios creadas anteriormente
+        try:
+            c.execute("ALTER TABLE usuarios ADD COLUMN email TEXT;")
+            conn.commit()
+        except Exception:
+            conn.rollback()
+
         # En Supabase (PostgreSQL), activar Row Level Security (RLS) en todas las tablas
         # para bloquear el acceso público desde la API REST (PostgREST) y eliminar las alertas de vulnerabilidad.
         if es_pg:
             nombres_tablas = [
                 "usuarios", "perfil", "comidas", "historial_peso",
-                "ayuno", "historial_ayunos", "ejercicios"
+                "ayuno", "historial_ayunos", "ejercicios", "recuperacion_password"
             ]
             for nombre_t in nombres_tablas:
                 try:
@@ -167,15 +184,19 @@ def init_db(_version=5):
 
 
 # --- FUNCIONES DE AUTENTICACIÓN Y SEGURIDAD ---
-def crear_usuario(usuario, password):
-    """Crea un usuario con contraseña protegida con PBKDF2-HMAC-SHA256 + salt."""
+def crear_usuario(usuario, password, email=""):
+    """Crea un usuario con contraseña protegida con PBKDF2-HMAC-SHA256 + salt y su correo."""
     conn, es_pg = _conectar()
     try:
         c = conn.cursor()
-        p = _ph(es_pg, 2)
+        p = _ph(es_pg, 3)
         pwd_hash = _hash_password(password)
+        email_limpio = str(email or "").strip().lower()
         try:
-            c.execute(f"INSERT INTO usuarios (usuario, password) VALUES ({p})", (usuario, pwd_hash))
+            c.execute(
+                f"INSERT INTO usuarios (usuario, password, email) VALUES ({p})",
+                (usuario, pwd_hash, email_limpio)
+            )
             conn.commit()
             return True
         except Exception:
@@ -220,6 +241,111 @@ def cambiar_password(usuario, password_actual, password_nueva):
         c.execute(f"UPDATE usuarios SET password = {s} WHERE usuario = {s}", (nuevo_hash, usuario))
         conn.commit()
         return True
+    finally:
+        conn.close()
+
+
+def obtener_email_usuario(usuario):
+    """Retorna el correo electrónico registrado para el usuario (o cadena vacía)."""
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        c.execute(f"SELECT email FROM usuarios WHERE usuario = {s}", (usuario,))
+        fila = c.fetchone()
+        if not fila or not fila[0]:
+            return ""
+        return str(fila[0]).strip()
+    finally:
+        conn.close()
+
+
+def actualizar_email_usuario(usuario, email):
+    """Actualiza el correo electrónico de recuperación del usuario."""
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        c.execute(f"UPDATE usuarios SET email = {s} WHERE usuario = {s}", (str(email).strip().lower(), usuario))
+        conn.commit()
+        return True
+    finally:
+        conn.close()
+
+
+def generar_codigo_recuperacion(usuario):
+    """
+    Genera un código numérico de 6 dígitos válido por 10 minutos,
+    guarda su hash en la base de datos y retorna el código en texto para enviarlo por correo.
+    """
+    codigo = f"{secrets.randbelow(900000) + 100000}"
+    codigo_hash = _hash_password(codigo)
+    expira_ts = time.time() + 600  # 10 minutos
+
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        p = _ph(es_pg, 4)
+        c.execute(f"SELECT usuario FROM recuperacion_password WHERE usuario = {s}", (usuario,))
+        if c.fetchone():
+            c.execute(
+                f"UPDATE recuperacion_password SET codigo_hash = {s}, expira_ts = {s}, intentos = 0 WHERE usuario = {s}",
+                (codigo_hash, expira_ts, usuario)
+            )
+        else:
+            c.execute(
+                f"INSERT INTO recuperacion_password (usuario, codigo_hash, expira_ts, intentos) VALUES ({p})",
+                (usuario, codigo_hash, expira_ts, 0)
+            )
+        conn.commit()
+        return codigo
+    finally:
+        conn.close()
+
+
+def verificar_codigo_y_restablecer(usuario, codigo_ingresado, password_nueva):
+    """
+    Verifica el código de 6 dígitos (no expirado y con menos de 5 intentos fallidos).
+    Retorna (exito: bool, mensaje: str).
+    """
+    conn, es_pg = _conectar()
+    try:
+        c = conn.cursor()
+        s = "%s" if es_pg else "?"
+        c.execute(
+            f"SELECT codigo_hash, expira_ts, intentos FROM recuperacion_password WHERE usuario = {s}",
+            (usuario,)
+        )
+        fila = c.fetchone()
+        if not fila:
+            return False, "No hay un código activo para este usuario. Solicita uno nuevo."
+
+        codigo_hash, expira_ts, intentos = fila
+        if time.time() > float(expira_ts):
+            c.execute(f"DELETE FROM recuperacion_password WHERE usuario = {s}", (usuario,))
+            conn.commit()
+            return False, "El código ha expirado (validez de 10 minutos). Solicita uno nuevo."
+
+        if int(intentos) >= 5:
+            c.execute(f"DELETE FROM recuperacion_password WHERE usuario = {s}", (usuario,))
+            conn.commit()
+            return False, "Demasiados intentos incorrectos. Solicita un código nuevo."
+
+        es_valido, _ = _verificar_hash(str(codigo_ingresado).strip(), codigo_hash)
+        if not es_valido:
+            c.execute(
+                f"UPDATE recuperacion_password SET intentos = {s} WHERE usuario = {s}",
+                (int(intentos) + 1, usuario)
+            )
+            conn.commit()
+            return False, f"Código incorrecto. Intentos restantes: {4 - int(intentos)}"
+
+        nuevo_hash = _hash_password(password_nueva)
+        c.execute(f"UPDATE usuarios SET password = {s} WHERE usuario = {s}", (nuevo_hash, usuario))
+        c.execute(f"DELETE FROM recuperacion_password WHERE usuario = {s}", (usuario,))
+        conn.commit()
+        return True, "¡Contraseña restablecida con éxito! Ya puedes iniciar sesión."
     finally:
         conn.close()
 
